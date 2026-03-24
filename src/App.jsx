@@ -1,9 +1,159 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import * as XLSX from "xlsx";
+import { createClient } from "@supabase/supabase-js";
+
+// ─── Supabase setup ─────────────────────────────────────────────────────────
+// createClient connects your app to your Supabase database.
+// SUPABASE_URL = your project's web address (where the database lives)
+// SUPABASE_ANON_KEY = a public key that lets your app talk to the database
+// These are safe to have in frontend code — Row Level Security on the database
+// controls what users can actually do.
+const SUPABASE_URL = "https://gevlhzzlivsiyxaysskv.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdldmxoenpsaXZzaXl4YXlzc2t2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQzMTE0NTMsImV4cCI6MjA4OTg4NzQ1M30.sWHGjuS5vuUapuGQRqmGeH1qE3iW9gfg8AyAlY86gRg";
+const supabase = (SUPABASE_URL !== "YOUR_SUPABASE_URL" && SUPABASE_ANON_KEY !== "YOUR_SUPABASE_ANON_KEY")
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
+
+// ─── Supabase helper functions ──────────────────────────────────────────────
+// These functions handle reading/writing to the cloud database.
+// "upsert" means "insert or update" — if the row exists, update it; if not, create it.
+// This prevents duplicate entries if the same data is saved twice.
+const db = {
+  // Fetch all fuel entries from the database, sorted newest first
+  async loadEntries() {
+    if (!supabase) return null;
+    const { data, error } = await supabase.from("fuel_entries").select("*").order("created_at", { ascending: false });
+    if (error) { console.error("DB loadEntries:", error); return null; }
+    // Convert database column names (snake_case) back to app format (camelCase)
+    return data.map(row => ({
+      id: row.id,
+      driver: row.driver,
+      registration: row.registration,
+      date: row.date,
+      station: row.station,
+      fuelType: row.fuel_type,
+      litres: row.litres ? Number(row.litres) : null,
+      totalCost: row.total_cost ? Number(row.total_cost) : null,
+      pricePerLitre: row.price_per_litre ? Number(row.price_per_litre) : null,
+      odometer: row.odometer ? Number(row.odometer) : null,
+      division: row.division,
+      vehicleType: row.vehicle_type,
+      cardNumber: row.card_number,
+      vehicleOnCard: row.vehicle_on_card,
+      discounts: row.discounts ? Number(row.discounts) : null,
+      handwrittenNotes: row.handwritten_notes,
+      lines: row.lines || [],
+      otherItems: row.other_items || [],
+      flags: row.flags || [],
+      splitGroup: row.split_group,
+      splitIndex: row.split_index,
+    }));
+  },
+
+  // Save one fuel entry to the database
+  async saveEntry(entry) {
+    if (!supabase) return;
+    const { error } = await supabase.from("fuel_entries").upsert({
+      id: entry.id,
+      driver: entry.driver,
+      registration: entry.registration,
+      date: entry.date,
+      station: entry.station,
+      fuel_type: entry.fuelType,
+      litres: entry.litres,
+      total_cost: entry.totalCost,
+      price_per_litre: entry.pricePerLitre,
+      odometer: entry.odometer,
+      division: entry.division,
+      vehicle_type: entry.vehicleType,
+      card_number: entry.cardNumber,
+      vehicle_on_card: entry.vehicleOnCard,
+      discounts: entry.discounts,
+      handwritten_notes: entry.handwrittenNotes,
+      lines: entry.lines || [],
+      other_items: entry.otherItems || [],
+      flags: entry.flags || [],
+      split_group: entry.splitGroup,
+      split_index: entry.splitIndex,
+    });
+    if (error) console.error("DB saveEntry:", error);
+  },
+
+  // Delete a fuel entry from the database
+  async deleteEntry(id) {
+    if (!supabase) return;
+    const { error } = await supabase.from("fuel_entries").delete().eq("id", id);
+    if (error) console.error("DB deleteEntry:", error);
+  },
+
+  // Load all service data from the database
+  async loadServiceData() {
+    if (!supabase) return null;
+    const { data, error } = await supabase.from("service_data").select("*");
+    if (error) { console.error("DB loadServiceData:", error); return null; }
+    // Convert array of rows into an object keyed by registration
+    const result = {};
+    data.forEach(row => {
+      result[row.registration] = {
+        lastServiceDate: row.last_service_date,
+        lastServiceOdometer: row.last_service_odometer ? Number(row.last_service_odometer) : null,
+        serviceIntervalKm: row.service_interval_km ? Number(row.service_interval_km) : null,
+        nextServiceDue: row.next_service_due,
+        notes: row.notes,
+      };
+    });
+    return result;
+  },
+
+  // Save service data for one vehicle
+  async saveServiceData(rego, data) {
+    if (!supabase) return;
+    const { error } = await supabase.from("service_data").upsert({
+      registration: rego,
+      last_service_date: data.lastServiceDate,
+      last_service_odometer: data.lastServiceOdometer,
+      service_interval_km: data.serviceIntervalKm,
+      next_service_due: data.nextServiceDue,
+      notes: data.notes,
+    });
+    if (error) console.error("DB saveServiceData:", error);
+  },
+
+  // Load all resolved flags
+  async loadResolvedFlags() {
+    if (!supabase) return null;
+    const { data, error } = await supabase.from("resolved_flags").select("*");
+    if (error) { console.error("DB loadResolvedFlags:", error); return null; }
+    const result = {};
+    data.forEach(row => {
+      result[row.id] = { by: row.resolved_by, note: row.note, at: row.resolved_at };
+    });
+    return result;
+  },
+
+  // Save a resolved flag
+  async saveResolvedFlag(flagId, flagData) {
+    if (!supabase) return;
+    const { error } = await supabase.from("resolved_flags").upsert({
+      id: flagId,
+      resolved_by: flagData.by,
+      note: flagData.note,
+      resolved_at: flagData.at,
+    });
+    if (error) console.error("DB saveResolvedFlag:", error);
+  },
+
+  // Delete a resolved flag (when un-resolving)
+  async deleteResolvedFlag(flagId) {
+    if (!supabase) return;
+    const { error } = await supabase.from("resolved_flags").delete().eq("id", flagId);
+    if (error) console.error("DB deleteResolvedFlag:", error);
+  },
+};
 
 // ─── Storage compatibility layer ────────────────────────────────────────────
-// Claude artifacts provide window.storage, but regular browsers don't.
-// This shim provides the same API using localStorage so the app works everywhere.
+// localStorage acts as a fast local cache. Supabase is the cloud "source of truth".
+// If Supabase is unavailable, the app still works using localStorage alone.
 if (!window.storage) {
   window.storage = {
     async get(key) {
@@ -1691,9 +1841,13 @@ export default function App() {
   const showToast = useCallback((msg, type = "success") => setToast({ msg, type }), []);
 
   // ── Storage ───────────────────────────────────────────────────────────────
+  // On app load: try to fetch data from Supabase (cloud) first.
+  // If Supabase is not configured or fails, fall back to localStorage (device).
+  // This means data works offline AND syncs to the cloud when available.
   useEffect(() => {
     (async () => {
       try {
+        // First, load local data (fast — already on this device)
         const [eRes, kRes, sRes, lRes, rRes, pRes] = await Promise.all([
           window.storage.get("fuel_entries").catch(() => null),
           window.storage.get("fuel_api_key").catch(() => null),
@@ -1702,12 +1856,29 @@ export default function App() {
           window.storage.get("fuel_resolved_flags").catch(() => null),
           window.storage.get("fuel_admin_passcode").catch(() => null),
         ]);
-        if (eRes?.value) setEntries(JSON.parse(eRes.value));
+        let localEntries = eRes?.value ? JSON.parse(eRes.value) : [];
+        let localService = sRes?.value ? JSON.parse(sRes.value) : {};
+        let localResolved = rRes?.value ? JSON.parse(rRes.value) : {};
         if (kRes?.value) { setApiKey(kRes.value); setApiKeyInput(kRes.value); }
-        if (sRes?.value) setServiceData(JSON.parse(sRes.value));
         if (lRes?.value) setLearnedDB(JSON.parse(lRes.value));
-        if (rRes?.value) setResolvedFlags(JSON.parse(rRes.value));
         if (pRes?.value) { setAdminPasscode(pRes.value); setPasscodeInput(pRes.value); }
+
+        // Then, try to load from Supabase (cloud — shared across all devices)
+        if (supabase) {
+          const [cloudEntries, cloudService, cloudResolved] = await Promise.all([
+            db.loadEntries().catch(() => null),
+            db.loadServiceData().catch(() => null),
+            db.loadResolvedFlags().catch(() => null),
+          ]);
+          // Use cloud data if available, otherwise use local data
+          if (cloudEntries) localEntries = cloudEntries;
+          if (cloudService) localService = cloudService;
+          if (cloudResolved) localResolved = cloudResolved;
+        }
+
+        setEntries(localEntries);
+        setServiceData(localService);
+        setResolvedFlags(localResolved);
         // Load saved driver profile
         try {
           const dRes = await window.storage.get("fuel_saved_driver");
@@ -1738,20 +1909,30 @@ export default function App() {
     })();
   }, []);
 
-  const persist = async (newEntries) => {
+  // persist saves fuel entries to BOTH localStorage (fast) and Supabase (cloud).
+  // This way the app feels instant but data is also backed up and shared.
+  const persist = async (newEntries, changedEntry = null) => {
     entriesRef.current = newEntries;
-    try { await window.storage.set("fuel_entries", JSON.stringify(newEntries)); setEntries(newEntries); }
-    catch (_) { setEntries(newEntries); }
+    setEntries(newEntries);
+    try { await window.storage.set("fuel_entries", JSON.stringify(newEntries)); } catch (_) {}
+    // Sync to cloud: save only the changed entry (faster than saving everything)
+    if (changedEntry) {
+      db.saveEntry(changedEntry).catch(() => {});
+    }
   };
 
-  const persistService = async (newData) => {
-    try { await window.storage.set("fuel_service_data", JSON.stringify(newData)); setServiceData(newData); }
-    catch (_) { setServiceData(newData); }
+  // persistService saves vehicle service data to both local and cloud
+  const persistService = async (newData, changedRego = null) => {
+    setServiceData(newData);
+    try { await window.storage.set("fuel_service_data", JSON.stringify(newData)); } catch (_) {}
+    if (changedRego && newData[changedRego]) {
+      db.saveServiceData(changedRego, newData[changedRego]).catch(() => {});
+    }
   };
 
   const handleServiceSave = (rego, data) => {
     const updated = { ...serviceData, [rego]: data };
-    persistService(updated);
+    persistService(updated, rego);
   };
 
   const persistLearned = async (newData) => {
@@ -1760,22 +1941,31 @@ export default function App() {
     catch (_) { setLearnedDB(newData); }
   };
 
-  const persistResolved = async (newData) => {
-    try { await window.storage.set("fuel_resolved_flags", JSON.stringify(newData)); setResolvedFlags(newData); }
-    catch (_) { setResolvedFlags(newData); }
+  // persistResolved saves flag resolutions to both local and cloud
+  const persistResolved = async (newData, changedFlagId = null, deleted = false) => {
+    setResolvedFlags(newData);
+    try { await window.storage.set("fuel_resolved_flags", JSON.stringify(newData)); } catch (_) {}
+    if (changedFlagId) {
+      if (deleted) {
+        db.deleteResolvedFlag(changedFlagId).catch(() => {});
+      } else if (newData[changedFlagId]) {
+        db.saveResolvedFlag(changedFlagId, newData[changedFlagId]).catch(() => {});
+      }
+    }
   };
 
   // Generate a stable unique ID for a flag
   const flagId = (f) => `${f.rego}::${f.text}::${f.date || ""}::${f.odo || ""}`;
 
   const resolveFlag = (fid, note, by) => {
-    const updated = { ...resolvedFlags, [fid]: { by: by || "Admin", note: note || "", at: new Date().toISOString() } };
-    persistResolved(updated);
+    const flagData = { by: by || "Admin", note: note || "", at: new Date().toISOString() };
+    const updated = { ...resolvedFlags, [fid]: flagData };
+    persistResolved(updated, fid);
   };
 
   const unresolveFlag = (fid) => {
     const { [fid]: _, ...rest } = resolvedFlags;
-    persistResolved(rest);
+    persistResolved(rest, fid, true);
   };
 
   // Learn from every submission — driver corrections override the static spreadsheet DB
@@ -2014,7 +2204,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         notes: otherForm.notes.trim(),
         hasReceipt: !!receiptB64,
       };
-      await persist([...entries, otherEntry]);
+      await persist([...entries, otherEntry], otherEntry);
       if (receiptB64) await saveReceiptImage(otherEntry.id, receiptB64, receiptMime);
       setSaving(false);
       setStep(4);
@@ -2190,6 +2380,11 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     }
 
     await persist(allNew);
+    // Sync all new entries to cloud
+    for (const eid of createdIds) {
+      const entry = allNew.find(e => e.id === eid);
+      if (entry) db.saveEntry(entry).catch(() => {});
+    }
     // Save receipt image for all entries from this submission
     if (receiptB64) {
       for (const eid of createdIds) {
@@ -2202,6 +2397,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
 
   const deleteEntry = async (id) => {
     await persist(entries.filter(e => e.id !== id));
+    db.deleteEntry(id).catch(() => {});
     await deleteReceiptImage(id);
     showToast("Entry deleted");
   };
@@ -2219,7 +2415,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       if (e.registration !== rego) result.push(e);
       else if (ri < regoEntries.length) result.push(regoEntries[ri++]);
     }
-    await persist(result);
+    await persist(result, updatedEntry);
     learnFromSubmission(updatedEntry);
     showToast("Entry updated");
   };
@@ -2228,6 +2424,9 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     setConfirmAction({
       message: `Delete ALL entries for ${rego}? This cannot be undone.`,
       onConfirm: async () => {
+        // Delete all entries for this vehicle from cloud
+        const toDelete = entries.filter(e => e.registration === rego);
+        for (const e of toDelete) { db.deleteEntry(e.id).catch(() => {}); }
         await persist(entries.filter(e => e.registration !== rego));
         if (serviceData[rego]) {
           const { [rego]: _, ...rest } = serviceData;
@@ -2250,6 +2449,8 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       e.registration === rego ? { ...e, division: newDivision, vehicleType: newVehicleType } : e
     );
     await persist(updated);
+    // Sync updated entries to cloud
+    updated.filter(e => e.registration === rego).forEach(e => db.saveEntry(e).catch(() => {}));
     const currentDB = learnedDBRef.current;
     const existing = currentDB[rego] || {};
     const newLearned = { ...currentDB, [rego]: { ...existing, t: newVehicleType, d: newDivision } };
@@ -5320,7 +5521,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={() => setConfirmAction({
             message: "Delete all fuel entries? This cannot be undone.",
-            onConfirm: async () => { await persist([]); setConfirmAction(null); showToast("All entries deleted"); }
+            onConfirm: async () => { for (const e of entries) { db.deleteEntry(e.id).catch(() => {}); } await persist([]); setConfirmAction(null); showToast("All entries deleted"); }
           })} style={{ padding: "8px 16px", background: "#fef2f2", color: "#b91c1c", border: "1px solid #fca5a5", borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}>Clear all entries</button>
           <button onClick={() => setConfirmAction({
             message: "Delete all service records?",
@@ -5636,7 +5837,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           vehicleType={manualEntry.vehicleType}
           onSave={async (entry) => {
             const newEntries = insertChronological(entries, entry);
-            await persist(newEntries);
+            await persist(newEntries, entry);
             setManualEntry(null);
             setExpandedRego(entry.registration);
             showToast(`Entry added for ${entry.registration}`);
