@@ -573,6 +573,113 @@ function normalizeReceiptData(data) {
   return data;
 }
 
+// ─── Fuzzy Fleet Card Matching ──────────────────────────────────────────────
+// Compares a scanned value against known fleet cards/regos and auto-corrects
+// misreads. Uses "edit distance" — the number of character changes needed to
+// turn one string into another. E.g. "DI5OD" vs "DI05QD" = distance 2.
+// If the scanned value is very close to a known value (within 2 changes),
+// we assume the AI misread it and correct it automatically.
+
+function editDistance(a, b) {
+  // Levenshtein distance — counts minimum insertions, deletions, substitutions
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
+function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB) {
+  if (!scannedCard && !scannedRego) return { cardNumber: null, vehicleOnCard: null };
+
+  // Build a list of all known fleet cards and regos from REGO_DB + learnedDB
+  const knownCards = []; // { card, rego, source }
+  REGO_DB.forEach(v => {
+    if (v.c && v.c.length >= 6) knownCards.push({ card: v.c.replace(/[\s*]/g, ""), rego: v.r.toUpperCase().replace(/\s+/g, ""), source: v });
+  });
+  if (learnedDB) {
+    Object.entries(learnedDB).forEach(([rego, data]) => {
+      if (data.c && data.c.length >= 6) {
+        const cleanCard = data.c.replace(/[\s*]/g, "");
+        // Don't duplicate if already in REGO_DB
+        if (!knownCards.some(k => k.card === cleanCard && k.rego === rego)) {
+          knownCards.push({ card: cleanCard, rego: rego.toUpperCase().replace(/\s+/g, ""), source: data });
+        }
+      }
+    });
+  }
+
+  let bestMatch = null;
+  let bestScore = Infinity;
+  const cleanScannedCard = scannedCard ? scannedCard.replace(/[\s*]/g, "").toUpperCase() : "";
+  const cleanScannedRego = scannedRego ? scannedRego.toUpperCase().replace(/\s+/g, "") : "";
+
+  // Strategy 1: Match by fleet card number (fuzzy)
+  if (cleanScannedCard && cleanScannedCard.length >= 6) {
+    for (const known of knownCards) {
+      const dist = editDistance(cleanScannedCard, known.card.toUpperCase());
+      // Allow up to 2 character differences for long card numbers (16 digits)
+      // Allow up to 1 for shorter identifiers
+      const maxDist = known.card.length >= 12 ? 2 : 1;
+      if (dist <= maxDist && dist < bestScore) {
+        bestScore = dist;
+        bestMatch = known;
+      }
+    }
+  }
+
+  // Strategy 2: Match by vehicle registration (fuzzy)
+  if (cleanScannedRego && cleanScannedRego.length >= 3) {
+    const allRegos = REGO_DB.map(v => ({ rego: v.r.toUpperCase().replace(/\s+/g, ""), source: v }));
+    if (learnedDB) {
+      Object.entries(learnedDB).forEach(([rego, data]) => {
+        allRegos.push({ rego: rego.toUpperCase().replace(/\s+/g, ""), source: data });
+      });
+    }
+    for (const known of allRegos) {
+      const dist = editDistance(cleanScannedRego, known.rego);
+      const maxDist = known.rego.length >= 5 ? 2 : 1;
+      if (dist <= maxDist && dist < bestScore) {
+        bestScore = dist;
+        // Find the fleet card for this rego
+        const cardMatch = knownCards.find(k => k.rego === known.rego);
+        bestMatch = cardMatch || { card: "", rego: known.rego, source: known.source };
+      }
+    }
+  }
+
+  // Strategy 3: Cross-reference — if we matched a card, check if the rego also matches
+  // This catches cases where both card AND rego have small errors
+  if (bestMatch && bestScore > 0) {
+    // Log the correction for debugging
+    const corrections = [];
+    if (cleanScannedCard && bestMatch.card && cleanScannedCard !== bestMatch.card.toUpperCase()) {
+      corrections.push(`Card: "${scannedCard}" → "${bestMatch.card}"`);
+    }
+    if (cleanScannedRego && bestMatch.rego && cleanScannedRego !== bestMatch.rego) {
+      corrections.push(`Rego: "${scannedRego}" → "${bestMatch.rego}"`);
+    }
+    if (corrections.length > 0) {
+      console.log("[Fuzzy Match] Auto-corrected:", corrections.join(", "));
+    }
+  }
+
+  return {
+    cardNumber: bestMatch?.card || scannedCard || null,
+    vehicleOnCard: bestMatch?.rego || scannedRego || null,
+    _corrected: bestScore > 0 && bestMatch !== null,
+    _originalCard: bestScore > 0 ? scannedCard : null,
+    _originalRego: bestScore > 0 ? scannedRego : null,
+  };
+}
+
 async function claudeScan(apiKey, b64, mime, prompt) {
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -2116,7 +2223,8 @@ Only return one of: 0, 90, 180, or 270.`;
       const normalized = normalizeReceiptData(result);
       setReceiptData(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
-        setCardData({ cardNumber: normalized.cardNumber || null, vehicleOnCard: normalized.vehicleOnCard || null });
+        const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current);
+        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
       }
     } catch (e) {
       if (scanIdRef.current !== currentScanId) return;
@@ -2140,7 +2248,8 @@ Only return one of: 0, 90, 180, or 270.`;
       const normalized = normalizeReceiptData(result);
       setReceiptData(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
-        setCardData({ cardNumber: normalized.cardNumber || null, vehicleOnCard: normalized.vehicleOnCard || null });
+        const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current);
+        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
       }
     } catch (e) { setError("Rotate/scan failed \u2014 " + e.message); }
     setReceiptScanning(false);
@@ -2155,7 +2264,8 @@ Only return one of: 0, 90, 180, or 270.`;
       const normalized = normalizeReceiptData(result);
       setReceiptData(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
-        setCardData({ cardNumber: normalized.cardNumber || null, vehicleOnCard: normalized.vehicleOnCard || null });
+        const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current);
+        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
       }
     } catch (e) { setError("Re-scan failed \u2014 " + e.message); }
     setReceiptScanning(false);
@@ -3095,8 +3205,9 @@ CRITICAL: The registration is on the line BELOW the surname. Do NOT return the s
 Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnCard":"registration from line 4 or null"}`
       );
       if (result?.cardNumber || result?.vehicleOnCard) {
-        setCardData({ cardNumber: result.cardNumber || null, vehicleOnCard: result.vehicleOnCard || null });
-        showToast("Fleet card scanned");
+        const matched = fuzzyMatchFleetCard(result.cardNumber, result.vehicleOnCard, learnedDBRef.current);
+        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
+        showToast(matched._corrected ? "Fleet card scanned (auto-corrected)" : "Fleet card scanned");
       } else {
         setError("Could not read fleet card from this photo. Try entering manually.");
       }
@@ -3284,14 +3395,22 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       {/* Fleet card detected from the same photo */}
       {hasCard && (
         <div className="fade-in" style={{
-          background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 8,
-          padding: "8px 12px", marginTop: 10, fontSize: 12,
+          background: cardData._corrected ? "#f0fdf4" : "#fff7ed",
+          border: `1px solid ${cardData._corrected ? "#86efac" : "#fdba74"}`,
+          borderRadius: 8, padding: "8px 12px", marginTop: 10, fontSize: 12,
         }}>
-          <div style={{ fontWeight: 700, color: "#c2410c", marginBottom: 4, fontSize: 11 }}>{"\uD83D\uDCB3"} Fleet card detected</div>
+          <div style={{ fontWeight: 700, color: cardData._corrected ? "#15803d" : "#c2410c", marginBottom: 4, fontSize: 11 }}>
+            {"\uD83D\uDCB3"} Fleet card {cardData._corrected ? "matched & auto-corrected" : "detected"}
+          </div>
           <div style={{ display: "flex", gap: 16 }}>
             <span><span style={{ color: "#94a3b8" }}>Card:</span> <span style={{ fontWeight: 600, color: "#0f172a" }}>...{cardData.cardNumber.slice(-6)}</span></span>
             {cardData.vehicleOnCard && <span><span style={{ color: "#94a3b8" }}>Rego:</span> <span style={{ fontWeight: 600, color: "#0f172a" }}>{cardData.vehicleOnCard}</span></span>}
           </div>
+          {cardData._corrected && (
+            <div style={{ fontSize: 10, color: "#64748b", marginTop: 4, fontStyle: "italic" }}>
+              AI scanned: {cardData._originalCard ? `card "${cardData._originalCard}"` : ""}{cardData._originalCard && cardData._originalRego ? " / " : ""}{cardData._originalRego ? `rego "${cardData._originalRego}"` : ""} {"\u2192"} matched to known fleet data
+            </div>
+          )}
         </div>
       )}
 
