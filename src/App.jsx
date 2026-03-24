@@ -1098,7 +1098,7 @@ function PhotoUpload({ preview, scanning, onFile, inputRef, label, caption }) {
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
       )}
-      <input ref={inputRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={e => onFile(e.target.files[0])} />
+      <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => onFile(e.target.files[0])} />
     </div>
   );
 }
@@ -3449,7 +3449,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               background: "white", color: "#b45309", border: "1px solid #fcd34d",
             }}>{"\u270E"} Enter manually</button>
           </div>
-          <input ref={cardOnlyRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }}
+          <input ref={cardOnlyRef} type="file" accept="image/*" style={{ display: "none" }}
             onChange={e => { if (e.target.files?.[0]) handleCardOnlyFile(e.target.files[0]); }} />
         </div>
       )}
