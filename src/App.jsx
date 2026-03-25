@@ -4465,7 +4465,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                                             <td style={{ whiteSpace: "nowrap" }}>
                                               {e.hasReceipt && <button onClick={() => setViewingReceipt(e.id)} title="View receipt" style={{ background: "none", border: "none", color: "#16a34a", cursor: "pointer", fontSize: 12, lineHeight: 1, padding: "2px 4px" }}>{"\uD83D\uDCC4"}</button>}
                                               <button onClick={() => setEditingEntry(e)} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 12, lineHeight: 1, padding: "2px 4px" }}>{"\u270E"}</button>
-                                              <button onClick={() => setConfirmAction({ message: `Delete this entry for ${e.registration} on ${e.date || "unknown date"}?`, onConfirm: async () => { await deleteEntry(e.id); setConfirmAction(null); } })} title="Delete" style={{ background: "none", border: "none", color: "#cbd5e1", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "2px 4px" }}>{"\u00D7"}</button>
+                                              <button onClick={() => setConfirmAction({ message: `Delete this entry for ${e.registration} on ${e.date || "unknown date"}? This will remove it from all sections (Data, Fleet Cards, Dashboard).`, onConfirm: async () => { await deleteEntry(e.id); setConfirmAction(null); } })} title="Delete" style={{ background: "none", border: "none", color: "#cbd5e1", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "2px 4px" }}>{"\u00D7"}</button>
                                             </td>
                                           </tr>
                                         );
@@ -4547,7 +4547,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                             <td style={{ whiteSpace: "nowrap" }}>
                               {e.hasReceipt && <button onClick={() => setViewingReceipt(e.id)} title="View receipt" style={{ background: "none", border: "none", color: "#16a34a", cursor: "pointer", fontSize: 12, lineHeight: 1, padding: "2px 4px" }}>{"\uD83D\uDCC4"}</button>}
                               <button onClick={() => setEditingEntry(e)} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 12, lineHeight: 1, padding: "2px 4px" }}>{"\u270E"}</button>
-                              <button onClick={() => setConfirmAction({ message: `Delete this ${e.equipment} claim?`, onConfirm: async () => { await deleteEntry(e.id); setConfirmAction(null); } })} title="Delete" style={{ background: "none", border: "none", color: "#cbd5e1", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "2px 4px" }}>{"\u00D7"}</button>
+                              <button onClick={() => setConfirmAction({ message: `Delete this ${e.equipment} claim? This will remove it from all sections (Data, Fleet Cards, Dashboard).`, onConfirm: async () => { await deleteEntry(e.id); setConfirmAction(null); } })} title="Delete" style={{ background: "none", border: "none", color: "#cbd5e1", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "2px 4px" }}>{"\u00D7"}</button>
                             </td>
                           </tr>
                         ))}
@@ -5820,6 +5820,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                       <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Litres</th>
                       <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>$/L</th>
                       <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0" }}>Cost</th>
+                      {isAdmin && <th style={{ color: "#374151", borderBottom: "1px solid #e2e8f0", width: 50 }}></th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -5834,6 +5835,12 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                         <td style={{ color: "#374151" }}>{e.litres ? `${e.litres}L` : "\u2014"}</td>
                         <td style={{ color: "#64748b" }}>{e.pricePerLitre ? `$${e.pricePerLitre}` : "\u2014"}</td>
                         <td style={{ fontWeight: 600, color: "#16a34a" }}>{e.totalCost ? `$${e.totalCost.toFixed(2)}` : "\u2014"}</td>
+                        {isAdmin && (
+                          <td style={{ whiteSpace: "nowrap" }}>
+                            <button onClick={() => setEditingEntry(e)} title="Edit" style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 12, lineHeight: 1, padding: "2px 4px" }}>{"\u270E"}</button>
+                            <button onClick={() => setConfirmAction({ message: `Delete this entry for ${e.registration || e.equipment || "unknown"} on ${e.date || "unknown date"}? This will remove it from all sections (Data, Fleet Cards, Dashboard).`, onConfirm: async () => { await deleteEntry(e.id); setConfirmAction(null); } })} title="Delete" style={{ background: "none", border: "none", color: "#cbd5e1", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "2px 4px" }}>{"\u00D7"}</button>
+                          </td>
+                        )}
                       </tr>
                     ))}
                     {/* Total row */}
@@ -5842,6 +5849,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                       <td style={{ fontWeight: 700, color: "#0f172a" }}>{c.totalLitres.toFixed(1)}L</td>
                       <td></td>
                       <td style={{ fontWeight: 700, color: "#16a34a" }}>${c.totalCost.toFixed(2)}</td>
+                      {isAdmin && <td></td>}
                     </tr>
                   </tbody>
                 </table>
