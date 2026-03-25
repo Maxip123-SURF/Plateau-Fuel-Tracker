@@ -1893,7 +1893,7 @@ export default function App() {
   const [adminPasscode, setAdminPasscode] = useState("admin"); // default passcode
   const [passcodeInput, setPasscodeInput] = useState("");
 
-  const [form, setForm] = useState({ driverName: "", registration: "", division: "", vehicleType: "", odometer: "" });
+  const [form, setForm] = useState({ driverFirstName: "", driverLastName: "", registration: "", division: "", vehicleType: "", odometer: "" });
   const [savedDriver, setSavedDriver] = useState(null); // { name, rego }
   const [otherMode, setOtherMode] = useState(false);
   const [otherForm, setOtherForm] = useState({ equipment: "", station: "", fleetCard: "", cardRego: "", notes: "", division: "Tree" });
@@ -2014,7 +2014,8 @@ export default function App() {
             if (dp.name || dp.rego) {
               setForm(f => {
                 const updated = { ...f };
-                if (dp.name) updated.driverName = dp.name;
+                if (dp.firstName) { updated.driverFirstName = dp.firstName; updated.driverLastName = dp.lastName || ""; }
+                else if (dp.name) { const parts = dp.name.split(" "); updated.driverFirstName = parts[0] || ""; updated.driverLastName = parts.slice(1).join(" ") || ""; }
                 if (dp.rego) {
                   updated.registration = dp.rego.toUpperCase();
                   const match = lookupRego(dp.rego, lRes?.value ? JSON.parse(lRes.value) : {}, eRes?.value ? JSON.parse(eRes.value) : []);
@@ -2153,9 +2154,16 @@ export default function App() {
   const resetForm = () => {
     setStep(1);
     // Re-apply saved driver profile if exists
-    const base = { driverName: "", registration: "", division: "", vehicleType: "", odometer: "" };
+    const base = { driverFirstName: "", driverLastName: "", registration: "", division: "", vehicleType: "", odometer: "" };
     if (savedDriver) {
-      if (savedDriver.name) base.driverName = savedDriver.name;
+      if (savedDriver.firstName) base.driverFirstName = savedDriver.firstName;
+      if (savedDriver.lastName) base.driverLastName = savedDriver.lastName;
+      // Fallback for old saved profiles that only have .name
+      if (!savedDriver.firstName && savedDriver.name) {
+        const parts = savedDriver.name.split(" ");
+        base.driverFirstName = parts[0] || "";
+        base.driverLastName = parts.slice(1).join(" ") || "";
+      }
       if (savedDriver.rego) {
         base.registration = savedDriver.rego.toUpperCase();
         const match = lookupRego(savedDriver.rego, learnedDBRef.current, entriesRef.current);
@@ -2319,7 +2327,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         submittedAt: now,
         entryType: "other",
         division: otherForm.division || "Tree",
-        driverName: form.driverName.trim(),
+        driverName: `${form.driverFirstName.trim()} ${form.driverLastName.trim()}`.trim(),
         equipment: otherForm.equipment.trim(),
         station: otherForm.station.trim() || station,
         fleetCardNumber: cardData?.cardNumber || cardNum || otherForm.fleetCard.trim() || "",
@@ -2353,7 +2361,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       return {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         submittedAt: now,
-        driverName: form.driverName.trim(),
+        driverName: `${form.driverFirstName.trim()} ${form.driverLastName.trim()}`.trim(),
         registration: rego,
         division: division || getDivision(vehicleType),
         vehicleType,
@@ -2472,7 +2480,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             submittedAt: now,
             entryType: "other",
             division: form.division || "Tree",
-            driverName: form.driverName.trim(),
+            driverName: `${form.driverFirstName.trim()} ${form.driverLastName.trim()}`.trim(),
             equipment: equipDesc,
             station,
             fleetCardNumber: cardNum,
@@ -2643,9 +2651,18 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
           }}>{"\u26FD"} Oil & Other</button>
         </div>
 
-        <FieldInput label="Driver Name" value={form.driverName} onChange={v => {
-          setForm(f => ({ ...f, driverName: v }));
-        }} placeholder="e.g. Jason Johnston" required />
+        <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <FieldInput label="First Name" value={form.driverFirstName} onChange={v => {
+              setForm(f => ({ ...f, driverFirstName: v }));
+            }} placeholder="e.g. Jason" required />
+          </div>
+          <div style={{ flex: 1 }}>
+            <FieldInput label="Last Name" value={form.driverLastName} onChange={v => {
+              setForm(f => ({ ...f, driverLastName: v }));
+            }} placeholder="e.g. Johnston" required />
+          </div>
+        </div>
 
         {/* Save my details */}
         {savedDriver ? (
@@ -2666,10 +2683,11 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
           </div>
         ) : (
           <button onClick={async () => {
-            const name = form.driverName.trim();
+            const firstName = form.driverFirstName.trim();
+            const lastName = form.driverLastName.trim();
             const rego = form.registration.trim().toUpperCase();
-            if (!name) { showToast("Enter your name first", "warn"); return; }
-            const profile = { name, rego: rego || null };
+            if (!firstName || !lastName) { showToast("Enter your first and last name first", "warn"); return; }
+            const profile = { name: `${firstName} ${lastName}`, firstName, lastName, rego: rego || null };
             setSavedDriver(profile);
             try { await window.storage.set("fuel_saved_driver", JSON.stringify(profile)); } catch (_) {}
             showToast(`Details saved \u2014 your name${rego ? " and rego" : ""} will auto-fill next time`);
@@ -2681,7 +2699,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
 
         {/* Recent entry indicator */}
         {(() => {
-          const name = form.driverName?.trim();
+          const name = `${form.driverFirstName?.trim() || ""} ${form.driverLastName?.trim() || ""}`.trim();
           if (!name) return null;
           const driverEntries = entries.filter(e => e.driverName?.toUpperCase() === name.toUpperCase()).sort((a, b) => {
             const da = parseDate(a.date), db = parseDate(b.date);
@@ -2874,7 +2892,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
 
             {error && <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 13, color: "#b91c1c" }}>{error}</div>}
             <PrimaryBtn onClick={() => {
-              if (!form.driverName) { setError("Please enter your name."); return; }
+              if (!form.driverFirstName || !form.driverLastName) { setError("Please enter your first and last name."); return; }
               if (!otherForm.equipment) { setError("Please enter the equipment / purpose."); return; }
               if (splitMode) {
                 for (const sp of splits) {
@@ -2931,7 +2949,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
                 {form._regoMatch.f && <div><span style={{ color: "#94a3b8" }}>Fuel:</span>{" "}<span style={{ color: "#374151", fontWeight: 500 }}>{form._regoMatch.f}</span></div>}
               </div>
             )}
-            {form._regoMatch.dr && form.driverName && form.driverName.toUpperCase() !== form._regoMatch.dr.toUpperCase() && (
+            {form._regoMatch.dr && form.driverFirstName && `${form.driverFirstName} ${form.driverLastName}`.trim().toUpperCase() !== form._regoMatch.dr.toUpperCase() && (
               <div style={{ marginTop: 6, fontSize: 10, color: "#b45309", background: "#fffbeb", padding: "4px 8px", borderRadius: 4, border: "1px solid #fcd34d" }}>
                 {"\u26A0"} Fleet card is assigned to {form._regoMatch.dr} {"\u2014"} different driver is fine, cards are often shared
               </div>
@@ -3167,7 +3185,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
 
         {error && <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 13, color: "#b91c1c" }}>{error}</div>}
         <PrimaryBtn onClick={() => {
-          if (!form.driverName || !form.registration || !form.division || !form.vehicleType || !form.odometer) { setError("Please fill in all required fields."); return; }
+          if (!form.driverFirstName || !form.driverLastName || !form.registration || !form.division || !form.vehicleType || !form.odometer) { setError("Please fill in all required fields."); return; }
           if (splitMode) {
             for (const sp of splits) {
               if (sp.splitType === "vehicle" && (!sp.rego || !sp.odometer)) { setError("Please fill in rego and odometer for all vehicles."); return; }
@@ -3541,7 +3559,8 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           <div style={{ background: "white", border: "1px solid #fde047", borderRadius: 10, overflow: "hidden", marginBottom: 20 }}>
             <div style={{ background: "#fefce8", padding: "8px 14px", fontSize: 11, fontWeight: 700, color: "#854d0e", letterSpacing: "0.04em", textTransform: "uppercase" }}>{"\u26FD"} Oil & Other Claim</div>
             {[
-              { label: "Driver", val: form.driverName, set: v => setForm(f => ({...f, driverName: v})) },
+              { label: "First Name", val: form.driverFirstName, set: v => setForm(f => ({...f, driverFirstName: v})) },
+              { label: "Last Name", val: form.driverLastName, set: v => setForm(f => ({...f, driverLastName: v})) },
               { label: "Division", val: otherForm.division, set: v => setOtherForm(f => ({...f, division: v})) },
               { label: "Equipment", val: otherForm.equipment, set: v => setOtherForm(f => ({...f, equipment: v})) },
               { label: "Station", val: otherForm.station || receiptData?.station || "", set: v => setOtherForm(f => ({...f, station: v})) },
@@ -3589,7 +3608,8 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         : (receiptData?.fuelCost?.toString() || receiptData?.totalCost?.toString() || ""));
 
     const vehicleRows = [
-      { label: "Driver", val: form.driverName, set: v => setForm(f => ({...f, driverName: v})) },
+      { label: "First Name", val: form.driverFirstName, set: v => setForm(f => ({...f, driverFirstName: v})) },
+      { label: "Last Name", val: form.driverLastName, set: v => setForm(f => ({...f, driverLastName: v})) },
       { label: "Registration", val: form.registration, set: v => setForm(f => ({...f, registration: v.toUpperCase()})) },
       { label: "Division", val: form.division, set: v => setForm(f => ({...f, division: v})) },
       { label: "Vehicle type", val: form.vehicleType, set: v => setForm(f => ({...f, vehicleType: v})) },
@@ -3754,7 +3774,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                 {otherMode ? otherForm.equipment : form.registration.toUpperCase()}
               </div>
               <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
-                {form.driverName}{date ? ` \u00B7 ${date}` : ""}
+                {`${form.driverFirstName} ${form.driverLastName}`.trim()}{date ? ` \u00B7 ${date}` : ""}
               </div>
             </div>
             {parsedCost && <div style={{ fontSize: 20, fontWeight: 700, color: "#16a34a" }}>${parsedCost.toFixed(2)}</div>}
