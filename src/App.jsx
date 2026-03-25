@@ -1955,55 +1955,63 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
   const ppl = entry.pricePerLitre;
   const totalCost = entry.totalCost;
 
-  // ── AI Confidence Flags ──
+  // ══════════════════════════════════════════════════════════════════════════
+  // category: "ai" — AI scan confidence & data quality issues
+  // These appear in the DATA section for manual review/correction
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // AI Confidence Flags
   if (entry._aiConfidence === "low") {
-    flags.push({ type: "danger", text: "AI low confidence", detail: `The scanner was unsure about this receipt. Issues: ${(entry._aiIssues || []).join(", ") || "unclear image"}` });
+    flags.push({ category: "ai", type: "danger", text: "AI low confidence", detail: `The scanner was unsure about this receipt. Issues: ${(entry._aiIssues || []).join(", ") || "unclear image"}` });
   } else if (entry._aiConfidence === "medium") {
-    flags.push({ type: "warn", text: "AI uncertain", detail: `Some values may be inaccurate. Issues: ${(entry._aiIssues || []).join(", ") || "partially unclear"}` });
+    flags.push({ category: "ai", type: "warn", text: "AI uncertain", detail: `Some values may be inaccurate. Issues: ${(entry._aiIssues || []).join(", ") || "partially unclear"}` });
   }
 
-  // ── Data Quality Flags ──
-  // Registration looks suspicious (too short, too long, or has unusual characters)
+  // Registration looks suspicious
   const rego = entry.registration || "";
   if (rego && (rego.length < 4 || rego.length > 8)) {
-    flags.push({ type: "warn", text: "Unusual rego format", detail: `"${rego}" — expected 4-8 characters` });
+    flags.push({ category: "ai", type: "warn", text: "Unusual rego format", detail: `"${rego}" — expected 4-8 characters` });
   }
 
-  // Driver name looks suspicious (single character, numbers in name)
+  // Driver name looks suspicious
   const driverName = entry.driverName || "";
   if (driverName && (/\d/.test(driverName))) {
-    flags.push({ type: "warn", text: "Numbers in driver name", detail: `"${driverName}" contains digits — possible typo` });
+    flags.push({ category: "ai", type: "warn", text: "Numbers in driver name", detail: `"${driverName}" contains digits — possible typo` });
   }
   if (driverName && driverName.split(" ").some(p => p.length === 1 && p !== "&")) {
-    flags.push({ type: "info", text: "Short name part", detail: `"${driverName}" — check first/last name is complete` });
+    flags.push({ category: "ai", type: "info", text: "Short name part", detail: `"${driverName}" — check first/last name is complete` });
   }
 
-  // Unusually high litres (over 200L is unusual for most vehicles)
+  // Unusually high litres
   if (litres > 300) {
-    flags.push({ type: "warn", text: "Very high litres", detail: `${litres}L — verify this is correct` });
+    flags.push({ category: "ai", type: "warn", text: "Very high litres", detail: `${litres}L — verify this is correct` });
   }
 
-  // Fuel price outside reasonable range (AUD $1.00 - $3.50 per litre as of 2024-2026)
+  // Fuel price outside reasonable range
   if (ppl && (ppl < 1.0 || ppl > 3.50)) {
-    flags.push({ type: "warn", text: "Unusual fuel price", detail: `$${ppl}/L — expected $1.00-$3.50/L` });
+    flags.push({ category: "ai", type: "warn", text: "Unusual fuel price", detail: `$${ppl}/L — expected $1.00-$3.50/L` });
   }
 
   // Date in the future
   if (entry.date) {
     const entryDate = parseDate(entry.date);
     if (entryDate && new Date(entryDate) > new Date()) {
-      flags.push({ type: "danger", text: "Future date", detail: `${entry.date} is in the future — likely misread` });
+      flags.push({ category: "ai", type: "danger", text: "Future date", detail: `${entry.date} is in the future — likely misread` });
     }
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // category: "ops" — Operational / fleet management issues
+  // These appear in the DASHBOARD for admin resolution
+  // ══════════════════════════════════════════════════════════════════════════
 
   let kmTravelled = null;
   if (prevOdo != null && odo != null) {
     kmTravelled = odo - prevOdo;
     if (kmTravelled < 0) {
-      flags.push({ type: "danger", text: "Odo went backwards", detail: `${prevOdo.toLocaleString()} \u2192 ${odo.toLocaleString()}` });
+      flags.push({ category: "ops", type: "danger", text: "Odo went backwards", detail: `${prevOdo.toLocaleString()} \u2192 ${odo.toLocaleString()}` });
     } else if (kmTravelled === 0) {
-      flags.push({ type: "warn", text: "No km travelled", detail: "Odometer unchanged since last entry" });
+      flags.push({ category: "ops", type: "warn", text: "No km travelled", detail: "Odometer unchanged since last entry" });
     }
   }
 
@@ -2011,23 +2019,21 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
     const lPerKm = litres / kmTravelled;
     const range = EFFICIENCY_RANGES[vehicleType] || EFFICIENCY_RANGES.Other;
     if (lPerKm > range.high) {
-      flags.push({ type: "warn", text: "High fuel usage", detail: `${lPerKm.toFixed(3)} L/km \u2014 above expected for ${vehicleType}` });
+      flags.push({ category: "ops", type: "warn", text: "High fuel usage", detail: `${lPerKm.toFixed(3)} L/km \u2014 above expected for ${vehicleType}` });
     } else if (lPerKm < range.low) {
-      flags.push({ type: "info", text: "Low fuel usage", detail: `${lPerKm.toFixed(3)} L/km \u2014 below expected` });
+      flags.push({ category: "ops", type: "info", text: "Low fuel usage", detail: `${lPerKm.toFixed(3)} L/km \u2014 below expected` });
     }
   }
 
   if (litres > 0 && ppl > 0 && totalCost > 0) {
     const calcCost = litres * ppl;
-    const diff = totalCost - calcCost; // positive = paid more, negative = paid less
+    const diff = totalCost - calcCost;
     const absDiff = Math.abs(diff);
     const pctDiff = (absDiff / calcCost) * 100;
     if (pctDiff > 15) {
-      // Beyond 15% — genuine flag
-      flags.push({ type: "warn", text: `Cost variance $${absDiff.toFixed(2)} (${pctDiff.toFixed(0)}%)`, detail: `Actual $${totalCost.toFixed(2)} vs calc $${calcCost.toFixed(2)} \u2014 exceeds fleet card leeway` });
+      flags.push({ category: "ops", type: "warn", text: `Cost variance $${absDiff.toFixed(2)} (${pctDiff.toFixed(0)}%)`, detail: `Actual $${totalCost.toFixed(2)} vs calc $${calcCost.toFixed(2)} \u2014 exceeds fleet card leeway` });
     } else if (absDiff > 0.50) {
-      // Within 15% but noticeable — fleet card surcharge/discount
-      flags.push({ type: "info", text: diff > 0 ? "Fleet card surcharge" : "Fleet card discount", detail: `${diff > 0 ? "+" : ""}$${diff.toFixed(2)} (${pctDiff.toFixed(1)}%) \u2014 actual $${totalCost.toFixed(2)} vs calc $${calcCost.toFixed(2)}` });
+      flags.push({ category: "ops", type: "info", text: diff > 0 ? "Fleet card surcharge" : "Fleet card discount", detail: `${diff > 0 ? "+" : ""}$${diff.toFixed(2)} (${pctDiff.toFixed(1)}%) \u2014 actual $${totalCost.toFixed(2)} vs calc $${calcCost.toFixed(2)}` });
     }
   }
 
@@ -2038,9 +2044,9 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
       const kmSince = odo - latestSvc.lastServiceKms;
       const kmRemaining = nextDue - odo;
       if (odo >= nextDue) {
-        flags.push({ type: "danger", text: "SERVICE OVERDUE", detail: `${kmSince.toLocaleString()} km since service \u2014 due at ${nextDue.toLocaleString()} km` });
+        flags.push({ category: "ops", type: "danger", text: "SERVICE OVERDUE", detail: `${kmSince.toLocaleString()} km since service \u2014 due at ${nextDue.toLocaleString()} km` });
       } else if (kmRemaining <= SERVICE_WARNING_KM) {
-        flags.push({ type: "warn", text: `Service in ${kmRemaining.toLocaleString()} km`, detail: `${kmSince.toLocaleString()} km since service \u2014 due at ${nextDue.toLocaleString()} km` });
+        flags.push({ category: "ops", type: "warn", text: `Service in ${kmRemaining.toLocaleString()} km`, detail: `${kmSince.toLocaleString()} km since service \u2014 due at ${nextDue.toLocaleString()} km` });
       }
     }
   }
@@ -2109,6 +2115,7 @@ export default function App() {
   const [expandedRego, setExpandedRego] = useState(null);
   const [serviceModal, setServiceModal] = useState(null);
   const [showFlags, setShowFlags] = useState(false);
+  const [showAiReview, setShowAiReview] = useState(false);
   const [resolvedFlags, setResolvedFlags] = useState({}); // { "flagId": { by, note, at } }
   const [flagsFilter, setFlagsFilter] = useState("open"); // "open" | "resolved" | "all"
   const [replyingFlag, setReplyingFlag] = useState(null); // flagId currently being responded to
@@ -4049,14 +4056,16 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     const regoCount = new Set(vehicleEntries.map(e => e.registration)).size;
     const filteredRegoCount = new Set(filtered.map(e => e.registration)).size;
 
-    // Count flags (excluding resolved)
+    // Count operational flags only (excluding resolved) — AI flags show in Data section
     let totalFlags = 0;
+    let totalAiFlags = 0;
     [...new Set(vehicleEntries.map(e => e.registration))].forEach(rego => {
       const re = vehicleEntries.filter(e => e.registration === rego).sort(sortEntries);
       const vt = re[0]?.vehicleType || "Other";
       re.forEach((e, i) => {
         const flags = getEntryFlags(e, i > 0 ? re[i - 1] : null, vt, serviceData[rego]);
-        totalFlags += flags.filter(f => (f.type === "danger" || f.type === "warn") && !resolvedFlags[flagId({ ...f, rego, date: e.date, odo: e.odometer })]).length;
+        totalFlags += flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn") && !resolvedFlags[flagId({ ...f, rego, date: e.date, odo: e.odometer })]).length;
+        totalAiFlags += flags.filter(f => f.category === "ai" && (f.type === "danger" || f.type === "warn") && !resolvedFlags[flagId({ ...f, rego, date: e.date, odo: e.odometer })]).length;
       });
     });
 
@@ -4076,6 +4085,94 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             </div>
           ))}
         </div>
+
+        {/* AI Review Banner */}
+        {isAdmin && totalAiFlags > 0 && (
+          <div onClick={() => setShowAiReview(!showAiReview)} style={{
+            background: showAiReview ? "#ede9fe" : "#fefce8", border: `1px solid ${showAiReview ? "#a78bfa" : "#fcd34d"}`,
+            borderRadius: 10, padding: "12px 14px", marginBottom: 16, cursor: "pointer",
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 20 }}>{"\uD83E\uDD16"}</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>
+                  {totalAiFlags} potential mistake{totalAiFlags !== 1 ? "s" : ""} to review
+                </div>
+                <div style={{ fontSize: 11, color: "#64748b" }}>
+                  AI flagged entries that may have scanning errors or incorrect data
+                </div>
+              </div>
+            </div>
+            <span style={{ fontSize: 14, color: "#64748b" }}>{showAiReview ? "\u25B2" : "\u25BC"}</span>
+          </div>
+        )}
+
+        {/* AI Review Panel */}
+        {isAdmin && showAiReview && (() => {
+          const aiFlags = [];
+          [...new Set(vehicleEntries.map(e => e.registration))].forEach(rego => {
+            const re = vehicleEntries.filter(e => e.registration === rego).sort(sortEntries);
+            const vt = re[0]?.vehicleType || "Other";
+            re.forEach((e, i) => {
+              const flags = getEntryFlags(e, i > 0 ? re[i - 1] : null, vt, serviceData[rego]);
+              flags.filter(f => f.category === "ai" && (f.type === "danger" || f.type === "warn")).forEach(f => {
+                const fid = flagId({ ...f, rego, date: e.date, odo: e.odometer });
+                if (!resolvedFlags[fid]) {
+                  aiFlags.push({ ...f, rego, date: e.date, _id: fid, _entry: e });
+                }
+              });
+            });
+          });
+
+          if (aiFlags.length === 0) return (
+            <div style={{ background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 10, padding: "16px", marginBottom: 16, textAlign: "center" }}>
+              <span style={{ fontSize: 16 }}>{"\u2713"}</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "#15803d", marginLeft: 8 }}>All AI flags reviewed</span>
+            </div>
+          );
+
+          return (
+            <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: "14px", marginBottom: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+                {"\uD83E\uDD16"} AI Scan Review
+                <span style={{ fontSize: 11, fontWeight: 500, color: "#64748b" }}>— tap an entry to edit and correct</span>
+              </div>
+              {aiFlags.map(f => (
+                <div key={f._id} style={{
+                  padding: "10px 12px", marginBottom: 8, borderRadius: 8,
+                  background: f.type === "danger" ? "#fef2f2" : "#fffbeb",
+                  border: `1px solid ${f.type === "danger" ? "#fca5a5" : "#fcd34d"}`,
+                }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        <span style={{ fontWeight: 700, color: "#0f172a", fontSize: 12 }}>{f.rego}</span>
+                        <span style={{ fontWeight: 600, fontSize: 11, color: f.type === "danger" ? "#b91c1c" : "#92400e" }}>{f.text}</span>
+                        <span style={{ color: "#94a3b8", fontSize: 10 }}>{f.date || ""}</span>
+                      </div>
+                      <div style={{ color: "#64748b", fontSize: 10, marginTop: 2 }}>{f.detail}</div>
+                    </div>
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      <button onClick={() => setEditingEntry(f._entry)} style={{
+                        padding: "4px 10px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                        background: "#f8fafc", color: "#64748b", border: "1px solid #e2e8f0",
+                        cursor: "pointer", fontFamily: "inherit",
+                      }}>{"\u270E"} Edit</button>
+                      <button onClick={() => {
+                        resolveFlag(f._id, "Reviewed — no action needed", "Admin");
+                      }} style={{
+                        padding: "4px 10px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                        background: "#f0fdf4", color: "#15803d", border: "1px solid #86efac",
+                        cursor: "pointer", fontFamily: "inherit",
+                      }}>{"\u2713"} OK</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
 
         {/* Search and filter */}
         <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
@@ -5376,27 +5473,24 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
   const renderFlagsModal = () => {
     if (!showFlags) return null;
     const fleet = fleetAnalysis;
-    const allFlags = fleet.flatMap(v => v.flags.filter(f => f.type === "danger" || f.type === "warn"));
+    // Dashboard only shows operational flags — AI flags appear in Data section
+    const opsFlags = fleet.flatMap(v => v.flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn")));
 
     // Add stable ID to each flag
-    const flagsWithId = allFlags.map(f => ({ ...f, _id: flagId(f) }));
+    const flagsWithId = opsFlags.map(f => ({ ...f, _id: flagId(f) }));
     const openFlags = flagsWithId.filter(f => !resolvedFlags[f._id]);
     const doneFlags = flagsWithId.filter(f => resolvedFlags[f._id]);
     const visibleFlags = flagsFilter === "open" ? openFlags : flagsFilter === "resolved" ? doneFlags : flagsWithId;
 
     // Group by type of issue
     const groupFlags = (list) => {
-      const ai = list.filter(f => f.text.includes("AI ") || f.text.includes("confidence"));
-      const data = list.filter(f => f.text.includes("rego format") || f.text.includes("driver name") || f.text.includes("Numbers in") || f.text.includes("Short name") || f.text.includes("Future date"));
       const svc = list.filter(f => f.text.includes("SERVICE") || f.text.includes("Service"));
       const fuel = list.filter(f => f.text.includes("fuel") || f.text.includes("Fuel") || f.text.includes("litres") || f.text.includes("Litres") || f.text.includes("price"));
       const cost = list.filter(f => f.text.includes("Cost") || f.text.includes("cost") || f.text.includes("variance"));
       const odo = list.filter(f => f.text.includes("Odo") || f.text.includes("km"));
-      const matched = [...ai, ...data, ...svc, ...fuel, ...cost, ...odo];
+      const matched = [...svc, ...fuel, ...cost, ...odo];
       const other = list.filter(f => !matched.includes(f));
       return [
-        { title: "AI Scan Concerns", icon: "\uD83E\uDD16", flags: ai, color: "#7c3aed" },
-        { title: "Data Quality Issues", icon: "\u26A0\uFE0F", flags: data, color: "#dc2626" },
         { title: "Service Required", icon: "\uD83D\uDD27", flags: svc, color: "#b91c1c" },
         { title: "Fuel Consumption Issues", icon: "\u26FD", flags: fuel, color: "#b45309" },
         { title: "Cost Discrepancies", icon: "\uD83D\uDCB0", flags: cost, color: "#b45309" },
