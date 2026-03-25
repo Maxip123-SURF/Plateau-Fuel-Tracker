@@ -470,7 +470,7 @@ Return ONLY valid JSON with no other text:
   "date": "DD/MM/YYYY — Australian format: DAY first, then MONTH, then full 4-digit YEAR. If receipt shows 16/03/26 return 16/03/2026. Never reverse the day and year.",
   "station": "station name or null",
   "fuelType": "primary fuel type or null",
-  "pricePerLitre": number_or_null,
+  "pricePerLitre": number_in_DOLLARS_per_litre_or_null,
   "totalCost": number_total_on_receipt_or_null,
   "litres": number_total_FUEL_litres_only,
   "lines": [
@@ -492,6 +492,7 @@ Return ONLY valid JSON with no other text:
 
 RULES:
 - "lines" array must ONLY contain actual fuel dispensed. If 2 fuel types were pumped, return 2 lines. Never include discounts as a line.
+- CRITICAL: pricePerLitre must ALWAYS be in DOLLARS, not cents. Australian receipts often show price in cents per litre (e.g. "274.9 c/L" or "274.90c/L" or "@ 274.9"). If the price looks like it's in cents (typically 100-400 range for fuel), DIVIDE BY 100 to convert to dollars. Example: "274.9 c/L" = 2.749 dollars per litre. "189.9c/L" = 1.899 dollars per litre. Australian fuel typically costs between $1.00 and $4.00 per litre — any value outside this range is almost certainly in cents.
 - CRITICAL: Each line MUST have its OWN fuelType and pricePerLitre extracted from the receipt. Do NOT copy the same fuel type to all lines. Example: if line 1 says "PREMIUM DIESEL @ $2.049/L" and line 2 says "PREMIUM 95 @ $1.919/L", then line 1 fuelType is "Premium Diesel" and line 2 fuelType is "Premium 95" — they are DIFFERENT fuels with DIFFERENT prices.
 - "otherItems" lists non-fuel products (oil, AdBlue, etc.) with the EXACT description as printed. Empty array [] if none. Do NOT include fleet card surcharges, card fees, or transaction fees — these are standard station charges and should be ignored entirely.
 - "litres" is the total of fuel lines ONLY (not other items).
@@ -532,6 +533,17 @@ function normalizeReceiptData(data) {
   if (data.lines.length === 0 && data.litres > 0) {
     data.lines = [{ litres: data.litres, cost: data.totalCost || null, pump: null, fuelType: data.fuelType || null }];
   }
+
+  // Fix price per litre if reported in cents instead of dollars (e.g. 274.9 instead of 2.749)
+  if (data.pricePerLitre && data.pricePerLitre > 10) {
+    data.pricePerLitre = Math.round((data.pricePerLitre / 100) * 10000) / 10000;
+  }
+  data.lines = data.lines.map(line => {
+    if (line.pricePerLitre && line.pricePerLitre > 10) {
+      line.pricePerLitre = Math.round((line.pricePerLitre / 100) * 10000) / 10000;
+    }
+    return line;
+  });
 
   // Cross-check each line: litres × price should ≈ cost (use per-line price when available)
   const ppl = data.pricePerLitre;
