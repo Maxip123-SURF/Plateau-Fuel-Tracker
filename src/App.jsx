@@ -4153,12 +4153,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                               background: "white", border: "1px solid #e2e8f0", borderRadius: 8,
                               boxShadow: "0 8px 24px rgba(0,0,0,0.12)", minWidth: 180, overflow: "hidden",
                             }}>
-                              <button onClick={() => { setVehicleMenu(null); setEditingVehicle(rego); }} style={{
+                              <button onClick={(ev) => { ev.stopPropagation(); setVehicleMenu(null); setEditingVehicle(rego); }} style={{
                                 width: "100%", padding: "10px 14px", background: "none", border: "none", borderBottom: "1px solid #f1f5f9",
                                 fontSize: 12, fontWeight: 500, color: "#374151", cursor: "pointer", fontFamily: "inherit",
                                 textAlign: "left", display: "flex", alignItems: "center", gap: 8,
                               }}><span style={{ fontSize: 14 }}>{"\u270E"}</span> Edit Vehicle</button>
-                              <button onClick={() => {
+                              <button onClick={(ev) => {
+                                ev.stopPropagation();
                                 setVehicleMenu(null);
                                 const latest = sorted[sorted.length - 1];
                                 setManualEntry({ rego, division: latest?.division || getDivision(vt), vehicleType: vt });
@@ -4167,17 +4168,17 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                                 fontSize: 12, fontWeight: 500, color: "#374151", cursor: "pointer", fontFamily: "inherit",
                                 textAlign: "left", display: "flex", alignItems: "center", gap: 8,
                               }}><span style={{ fontSize: 14 }}>{"\u2795"}</span> Add Entry</button>
-                              <button onClick={() => { setVehicleMenu(null); setServiceModal(rego); }} style={{
+                              <button onClick={(ev) => { ev.stopPropagation(); setVehicleMenu(null); setServiceModal(rego); }} style={{
                                 width: "100%", padding: "10px 14px", background: "none", border: "none", borderBottom: "1px solid #f1f5f9",
                                 fontSize: 12, fontWeight: 500, color: "#374151", cursor: "pointer", fontFamily: "inherit",
                                 textAlign: "left", display: "flex", alignItems: "center", gap: 8,
                               }}><span style={{ fontSize: 14 }}>{"\uD83D\uDD27"}</span> Service & Mechanics</button>
-                              <button onClick={() => { setVehicleMenu(null); setExpandedRego(isExpanded ? null : rego); }} style={{
+                              <button onClick={(ev) => { ev.stopPropagation(); setVehicleMenu(null); setExpandedRego(isExpanded ? null : rego); }} style={{
                                 width: "100%", padding: "10px 14px", background: "none", border: "none", borderBottom: "1px solid #f1f5f9",
                                 fontSize: 12, fontWeight: 500, color: "#374151", cursor: "pointer", fontFamily: "inherit",
                                 textAlign: "left", display: "flex", alignItems: "center", gap: 8,
                               }}><span style={{ fontSize: 14 }}>{"\uD83D\uDCCA"}</span> {isExpanded ? "Hide Entries" : "View Entries"}</button>
-                              <button onClick={() => { setVehicleMenu(null); deleteVehicle(rego); }} style={{
+                              <button onClick={(ev) => { ev.stopPropagation(); setVehicleMenu(null); deleteVehicle(rego); }} style={{
                                 width: "100%", padding: "10px 14px", background: "none", border: "none",
                                 fontSize: 12, fontWeight: 500, color: "#dc2626", cursor: "pointer", fontFamily: "inherit",
                                 textAlign: "left", display: "flex", alignItems: "center", gap: 8,
