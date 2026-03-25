@@ -3877,10 +3877,10 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
   // ── Data view ─────────────────────────────────────────────────────────────
   const renderData = () => {
     // Separate vehicle entries from "other" claims
-    const vehicleEntries = entries.filter(e => e.entryType !== "other");
+    const vehicleEntries = entries.filter(e => e.entryType !== "other" && e.registration);
 
     // Build available vehicle types for filter
-    const allVehicleTypes = [...new Set(vehicleEntries.map(e => e.vehicleType))].sort();
+    const allVehicleTypes = [...new Set(vehicleEntries.map(e => e.vehicleType).filter(Boolean))].sort();
 
     // Apply search filter
     const searchTerm = dataSearch.trim().toUpperCase();
@@ -3899,9 +3899,10 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       : DIVISION_KEYS.includes(dataFilter) ? searchFiltered.filter(e => (e.division || getDivision(e.vehicleType)) === dataFilter)
       : searchFiltered.filter(e => e.vehicleType === dataFilter);
 
-    // Group: division → vehicleType → rego
+    // Group: division → vehicleType → rego (skip entries with no registration)
     const divGroups = {};
     filtered.forEach(e => {
+      if (!e.registration) return;
       const div = e.division || getDivision(e.vehicleType) || "Tree";
       const vt = e.vehicleType || "Other";
       if (!divGroups[div]) divGroups[div] = {};
