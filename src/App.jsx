@@ -4785,7 +4785,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     const fleet = fleetAnalysis;
     const overdue = fleet.filter(v => v.svcStatus === "overdue");
     const approaching = fleet.filter(v => v.svcStatus === "approaching");
-    const allFlags = fleet.flatMap(v => v.flags.filter(f => f.type === "danger" || f.type === "warn"));
+    const allFlags = fleet.flatMap(v => v.flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn")));
     const openFlagCount = allFlags.filter(f => !resolvedFlags[flagId(f)]).length;
     const worsening = fleet.filter(v => v.trend === "worsening");
 
@@ -5261,9 +5261,9 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                         </span>
                       </td>
                       <td>
-                        {v.flags.filter(f => f.type === "danger" || f.type === "warn").length > 0 ? (
+                        {v.flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn")).length > 0 ? (
                           <span className="flag-badge flag-danger" style={{ fontSize: 9, cursor: "pointer" }} onClick={() => setShowFlags(true)}>
-                            {v.flags.filter(f => f.type === "danger" || f.type === "warn").length}
+                            {v.flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn")).length}
                           </span>
                         ) : (
                           <span style={{ color: "#86efac", fontSize: 12 }}>{"\u2713"}</span>
