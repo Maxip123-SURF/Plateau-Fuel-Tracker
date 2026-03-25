@@ -2108,6 +2108,7 @@ export default function App() {
   const [dataSearch, setDataSearch] = useState("");
   const [cardMonth, setCardMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; });
   const [cardSearch, setCardSearch] = useState("");
+  const [editingCard, setEditingCard] = useState(null); // { oldCard, newCard, newDrivers, newRegos } for inline card header editing
   const [expandedFuelType, setExpandedFuelType] = useState(null);
   const [dashPeriod, setDashPeriod] = useState("monthly"); // "daily" | "weekly" | "monthly" | "custom" | "all"
   const [dashDate, setDashDate] = useState(() => new Date().toISOString().slice(0, 10)); // YYYY-MM-DD
@@ -2748,6 +2749,33 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     await persist(result, updatedEntry);
     learnFromSubmission(updatedEntry);
     showToast("Entry updated");
+  };
+
+  // Bulk update fleet card details across all entries with that card number
+  const updateCardDetails = async (oldCardNum, newCardNum, newRego) => {
+    const oldKey = oldCardNum.replace(/\s/g, "");
+    const newKey = newCardNum.replace(/\s/g, "");
+    const updated = entries.map(e => {
+      const entryCard = (e.fleetCardNumber || e.cardNumber || "").replace(/\s/g, "");
+      if (entryCard !== oldKey) return e;
+      const u = { ...e };
+      if (newKey && newKey !== oldKey) {
+        u.fleetCardNumber = newKey;
+        u.cardNumber = newKey;
+      }
+      if (newRego !== undefined) {
+        u.cardRego = newRego.toUpperCase();
+        u.vehicleOnCard = newRego.toUpperCase();
+      }
+      return u;
+    });
+    await persist(updated);
+    // Update each affected entry in Supabase
+    for (const e of updated) {
+      const entryCard = (e.fleetCardNumber || e.cardNumber || "").replace(/\s/g, "");
+      if (entryCard === newKey) db.saveEntry(e).catch(() => {});
+    }
+    showToast(`Updated card ...${newKey.slice(-6)}`);
   };
 
   const deleteVehicle = (rego) => {
@@ -5857,11 +5885,41 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                 padding: "12px 14px", background: "#fff7ed", borderBottom: "1px solid #fdba74",
                 display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8,
               }}>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: "#c2410c" }}>{"\uD83D\uDCB3"} ...{c.card.slice(-6)}</div>
-                  <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>
-                    {[...c.drivers].join(", ")} {"\u00B7"} {[...c.regos].join(", ")}
-                  </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {isAdmin && editingCard?.oldCard === c.card ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600, width: 55 }}>Card #:</span>
+                        <input value={editingCard.newCard} onChange={e => setEditingCard(p => ({ ...p, newCard: e.target.value.replace(/\s/g, "") }))}
+                          style={{ flex: 1, padding: "4px 8px", borderRadius: 5, border: "1px solid #fdba74", fontSize: 12, fontFamily: "inherit", outline: "none", color: "#0f172a" }} />
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600, width: 55 }}>Rego:</span>
+                        <input value={editingCard.newRego} onChange={e => setEditingCard(p => ({ ...p, newRego: e.target.value.toUpperCase() }))}
+                          style={{ flex: 1, padding: "4px 8px", borderRadius: 5, border: "1px solid #fdba74", fontSize: 12, fontFamily: "inherit", outline: "none", color: "#0f172a", textTransform: "uppercase" }} />
+                      </div>
+                      <div style={{ display: "flex", gap: 6, marginTop: 2 }}>
+                        <button onClick={async () => {
+                          await updateCardDetails(editingCard.oldCard, editingCard.newCard, editingCard.newRego);
+                          setEditingCard(null);
+                        }} style={{ padding: "4px 12px", borderRadius: 5, fontSize: 10, fontWeight: 700, background: "#16a34a", color: "white", border: "none", cursor: "pointer", fontFamily: "inherit" }}>Save</button>
+                        <button onClick={() => setEditingCard(null)} style={{ padding: "4px 12px", borderRadius: 5, fontSize: 10, fontWeight: 600, background: "white", color: "#64748b", border: "1px solid #e2e8f0", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#c2410c", display: "flex", alignItems: "center", gap: 6 }}>
+                        {"\uD83D\uDCB3"} ...{c.card.slice(-6)}
+                        {isAdmin && (
+                          <button onClick={() => setEditingCard({ oldCard: c.card, newCard: c.card, newRego: [...c.regos].join(", ") })}
+                            title="Edit card details" style={{ background: "none", border: "none", color: "#c2410c", cursor: "pointer", fontSize: 12, padding: "0 4px", opacity: 0.6 }}>{"\u270E"}</button>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>
+                        {[...c.drivers].join(", ")} {"\u00B7"} {[...c.regos].join(", ")}
+                      </div>
+                    </>
+                  )}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <div style={{ textAlign: "right" }}>
