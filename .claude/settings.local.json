@@ -22,7 +22,8 @@
       "Bash(wc -l \"/c/Users/ptsuser/Downloads/fuel_app \\(1\\).jsx\")",
       "Bash(wc -l \"C:\\\\Users\\\\ptsuser\\\\Downloads\\\\fuel_app \\(1\\).jsx\")",
       "Bash(wc -l \"C:/Users/ptsuser/Downloads/fuel_app \\(1\\).jsx\")",
-      "Bash(npm i:*)"
+      "Bash(npm i:*)",
+      "Bash(npm run:*)"
     ]
   }
 }

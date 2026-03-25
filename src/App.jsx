@@ -712,7 +712,12 @@ async function claudeScan(apiKey, b64, mime, prompt) {
   }
   const d = await resp.json();
   const raw = (d.content?.[0]?.text || "{}").replace(/```json\n?|```/g, "").trim();
-  return JSON.parse(raw);
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error("Failed to parse AI response:", raw);
+    throw new Error("AI returned an unreadable response — please try scanning again");
+  }
 }
 
 function parseDate(str) {
@@ -1962,6 +1967,9 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [splitMode, setSplitMode] = useState(false);
   const [splits, setSplits] = useState([]); // [{ id, rego, odometer, litres, _match }]
+  const [manualCard, setManualCard] = useState(false);
+  const [manualCardNum, setManualCardNum] = useState("");
+  const [manualCardRego, setManualCardRego] = useState("");
   const [dataFilter, setDataFilter] = useState("All");
   const [dataSearch, setDataSearch] = useState("");
   const [cardMonth, setCardMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; });
@@ -3252,9 +3260,6 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
   };
 
   const cardOnlyRef = useRef();
-  const [manualCard, setManualCard] = useState(false);
-  const [manualCardNum, setManualCardNum] = useState("");
-  const [manualCardRego, setManualCardRego] = useState("");
 
   const handleCardOnlyFile = async (file) => {
     if (!file || !file.type.startsWith("image/") || !apiKey) return;
@@ -4475,7 +4480,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         const earlier = efficiencies.slice(0, -3);
         const recentAvg = recent.reduce((s, e) => s + e.lPerKm, 0) / recent.length;
         const earlierAvg = earlier.reduce((s, e) => s + e.lPerKm, 0) / earlier.length;
-        const pctChange = ((recentAvg - earlierAvg) / earlierAvg) * 100;
+        const pctChange = earlierAvg > 0 ? ((recentAvg - earlierAvg) / earlierAvg) * 100 : 0;
         if (pctChange > 15) trend = "worsening";
         else if (pctChange < -15) trend = "improving";
         else trend = "stable";
@@ -4718,7 +4723,8 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               if (dashPeriod === "daily") return periodFillUps > 0 ? `$${(periodSpend / periodFillUps).toFixed(0)}` : "$0";
               if (dashPeriod === "weekly") return `$${(periodSpend / 7).toFixed(0)}`;
               if (dashPeriod === "monthly") { const days = new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 0).getDate(); return `$${(periodSpend / days).toFixed(0)}`; }
-              const allDays = entries.length > 0 ? Math.max(1, Math.round((new Date() - new Date(parseDate(entries[0]?.date) || Date.now())) / 86400000)) : 1;
+              const firstDate = entries.length > 0 ? parseDate(entries[0]?.date) : 0;
+              const allDays = firstDate > 0 ? Math.max(1, Math.round((Date.now() - firstDate) / 86400000)) : 1;
               return `$${(periodSpend / allDays).toFixed(0)}`;
             })(), color: "#64748b" },
           ].map(s => (
@@ -5306,7 +5312,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               {isResolved && resolution && (
                 <div style={{ marginTop: 6, padding: "4px 8px", background: "#f0fdf4", borderRadius: 4, border: "1px solid #bbf7d0", fontSize: 10 }}>
                   <span style={{ color: "#15803d", fontWeight: 600 }}>{"\u2713"} Resolved by {resolution.by}</span>
-                  <span style={{ color: "#94a3b8", marginLeft: 8 }}>{new Date(resolution.at).toLocaleDateString()}</span>
+                  <span style={{ color: "#94a3b8", marginLeft: 8 }}>{resolution.at ? new Date(resolution.at).toLocaleDateString("en-AU") : ""}</span>
                   {resolution.note && <div style={{ color: "#374151", marginTop: 2 }}>{resolution.note}</div>}
                 </div>
               )}
