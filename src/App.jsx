@@ -695,8 +695,8 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB) {
   };
 
   // Strategy 1: Match by fleet card number (smart multi-signal matching)
-  // Embossed card numbers are often heavily misread by AI — use prefix/suffix anchoring
-  // plus digit-level matching instead of strict edit distance
+  // Fleet cards share a common 8-digit account prefix (e.g. 70343051) — the LAST 8 digits
+  // are what uniquely identify each card. Focus matching on those unique digits.
   if (cleanScannedCard && cleanScannedCard.length >= 6) {
     for (const known of knownCards) {
       const knownClean = known.card.toUpperCase();
@@ -711,28 +711,44 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB) {
         continue;
       }
 
-      // For 16-digit cards: use prefix+suffix anchoring
-      // If first 4 digits match AND last 3 digits match, it's almost certainly the same card
+      // For 16-digit cards: focus on the unique last 8 digits
+      // First 8 digits are shared account prefix across all fleet cards
       if (knownClean.length >= 12) {
+        const scannedUnique = cleanScannedCard.slice(-8); // Last 8 = unique card ID
+        const knownUnique = knownClean.slice(-8);
+        const uniqueDist = editDistance(scannedUnique, knownUnique);
+        const uniqueMatches = digitMatchScore(scannedUnique, knownUnique);
         const first4Match = cleanScannedCard.slice(0, 4) === knownClean.slice(0, 4);
         const last3Match = cleanScannedCard.slice(-3) === knownClean.slice(-3);
         const last4Match = cleanScannedCard.slice(-4) === knownClean.slice(-4);
-        const posMatches = digitMatchScore(cleanScannedCard, knownClean);
-        const matchRatio = posMatches / Math.max(cleanScannedCard.length, knownClean.length);
 
-        // High confidence: prefix AND suffix match
-        if (first4Match && (last3Match || last4Match)) {
-          const score = 1; // Treat as near-match
+        // High confidence: last 8 digits are close (<=3 edits) — the unique part mostly matches
+        if (uniqueDist <= 3 && first4Match) {
+          const score = uniqueDist === 0 ? 0 : 1;
           if (score < bestScore) { bestScore = score; bestMatch = known; }
           continue;
         }
-        // Medium confidence: prefix matches and >50% of digits match
-        if (first4Match && matchRatio > 0.5) {
+        // High confidence: prefix AND suffix match (anchored at both ends)
+        if (first4Match && (last3Match || last4Match)) {
+          const score = 1;
+          if (score < bestScore) { bestScore = score; bestMatch = known; }
+          continue;
+        }
+        // Medium confidence: last 3-4 digits match and >50% of unique digits match
+        if ((last3Match || last4Match) && uniqueMatches >= 4) {
           const score = 2;
           if (score < bestScore) { bestScore = score; bestMatch = known; }
           continue;
         }
-        // Lower confidence: >60% digit match and same length
+        // Medium confidence: prefix matches and >50% of unique digits match
+        if (first4Match && uniqueMatches >= 4) {
+          const score = 2;
+          if (score < bestScore) { bestScore = score; bestMatch = known; }
+          continue;
+        }
+        // Lower confidence: >60% of all digits match positionally
+        const posMatches = digitMatchScore(cleanScannedCard, knownClean);
+        const matchRatio = posMatches / Math.max(cleanScannedCard.length, knownClean.length);
         if (matchRatio > 0.6 && cleanScannedCard.length === knownClean.length) {
           const score = 3;
           if (score < bestScore) { bestScore = score; bestMatch = known; }
