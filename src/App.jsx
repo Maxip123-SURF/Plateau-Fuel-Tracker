@@ -25,29 +25,45 @@ const db = {
     const { data, error } = await supabase.from("fuel_entries").select("*").order("created_at", { ascending: false });
     if (error) { console.error("DB loadEntries:", error); return null; }
     // Convert database column names (snake_case) back to app format (camelCase)
-    return data.map(row => ({
-      id: row.id,
-      driver: row.driver,
-      registration: row.registration,
-      date: row.date,
-      station: row.station,
-      fuelType: row.fuel_type,
-      litres: row.litres ? Number(row.litres) : null,
-      totalCost: row.total_cost ? Number(row.total_cost) : null,
-      pricePerLitre: row.price_per_litre ? Number(row.price_per_litre) : null,
-      odometer: row.odometer ? Number(row.odometer) : null,
-      division: row.division,
-      vehicleType: row.vehicle_type,
-      cardNumber: row.card_number,
-      vehicleOnCard: row.vehicle_on_card,
-      discounts: row.discounts ? Number(row.discounts) : null,
-      handwrittenNotes: row.handwritten_notes,
-      lines: row.lines || [],
-      otherItems: row.other_items || [],
-      flags: row.flags || [],
-      splitGroup: row.split_group,
-      splitIndex: row.split_index,
-    }));
+    return data.map(row => {
+      const meta = row.metadata || {};
+      return {
+        id: row.id,
+        driver: row.driver,
+        driverName: row.driver,
+        registration: row.registration,
+        date: row.date,
+        station: row.station,
+        fuelType: row.fuel_type,
+        litres: row.litres ? Number(row.litres) : null,
+        totalCost: row.total_cost ? Number(row.total_cost) : null,
+        pricePerLitre: row.price_per_litre ? Number(row.price_per_litre) : null,
+        odometer: row.odometer ? Number(row.odometer) : null,
+        division: row.division,
+        vehicleType: row.vehicle_type,
+        cardNumber: row.card_number,
+        fleetCardNumber: row.card_number,
+        vehicleOnCard: row.vehicle_on_card,
+        cardRego: row.vehicle_on_card,
+        discounts: row.discounts ? Number(row.discounts) : null,
+        handwrittenNotes: row.handwritten_notes,
+        lines: row.lines || [],
+        otherItems: row.other_items || [],
+        flags: row.flags || [],
+        splitGroup: row.split_group,
+        splitIndex: row.split_index,
+        // Extra fields from metadata
+        entryType: meta.entryType || null,
+        equipment: meta.equipment || null,
+        fleetCardVehicle: meta.fleetCardVehicle || null,
+        fleetCardDriver: meta.fleetCardDriver || null,
+        vehicleName: meta.vehicleName || null,
+        splitReceipt: meta.splitReceipt || false,
+        hasReceipt: meta.hasReceipt || false,
+        _aiConfidence: meta._aiConfidence || null,
+        _aiIssues: meta._aiIssues || [],
+      };
+    });
   },
 
   // Save one fuel entry to the database
@@ -55,7 +71,7 @@ const db = {
     if (!supabase) return;
     const { error } = await supabase.from("fuel_entries").upsert({
       id: entry.id,
-      driver: entry.driver,
+      driver: entry.driverName || entry.driver,
       registration: entry.registration,
       date: entry.date,
       station: entry.station,
@@ -66,8 +82,8 @@ const db = {
       odometer: entry.odometer,
       division: entry.division,
       vehicle_type: entry.vehicleType,
-      card_number: entry.cardNumber,
-      vehicle_on_card: entry.vehicleOnCard,
+      card_number: entry.fleetCardNumber || entry.cardNumber,
+      vehicle_on_card: entry.cardRego || entry.vehicleOnCard,
       discounts: entry.discounts,
       handwritten_notes: entry.handwrittenNotes,
       lines: entry.lines || [],
@@ -75,6 +91,17 @@ const db = {
       flags: entry.flags || [],
       split_group: entry.splitGroup,
       split_index: entry.splitIndex,
+      metadata: {
+        entryType: entry.entryType || null,
+        equipment: entry.equipment || null,
+        fleetCardVehicle: entry.fleetCardVehicle || null,
+        fleetCardDriver: entry.fleetCardDriver || null,
+        vehicleName: entry.vehicleName || null,
+        splitReceipt: entry.splitReceipt || false,
+        hasReceipt: entry.hasReceipt || false,
+        _aiConfidence: entry._aiConfidence || null,
+        _aiIssues: entry._aiIssues || [],
+      },
     });
     if (error) console.error("DB saveEntry:", error);
   },
