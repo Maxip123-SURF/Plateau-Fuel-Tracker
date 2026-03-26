@@ -4469,22 +4469,20 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           const mi = sp._matchedItem;
 
           let spRows;
-          if (isOther && mi) {
-            const miPpl = mi.pricePerLitre || (mi.litres > 0 && mi.cost > 0 ? parseFloat((mi.cost / mi.litres).toFixed(4)) : null);
+          if (isOther && (mi || ml)) {
+            // Matched to a scanned item or fuel line
+            const srcLitres = mi?.litres || ml?.litres || null;
+            const srcCost = mi?.cost || ml?.cost || null;
+            const srcPpl = mi?.pricePerLitre || ml?.pricePerLitre || (srcLitres > 0 && srcCost > 0 ? parseFloat((srcCost / srcLitres).toFixed(4)) : null);
+            const displayLitres = srcLitres?.toString() || sp.litres || "";
+            const displayPpl = srcPpl?.toString() || "";
+            const displayCost = sp._costOverride || srcCost?.toFixed(2) || (parseFloat(displayLitres) > 0 && srcPpl > 0 ? (parseFloat(displayLitres) * srcPpl).toFixed(2) : "");
             spRows = [
               { label: "Equipment", val: sp.equipment, set: v => updateSplit(sp.id, "equipment", v) },
-              { label: "Matched to", val: mi.description + (mi.quantity ? ` (${mi.quantity})` : ""), set: null },
-              { label: "Litres", val: mi.litres?.toString() || sp.litres || "", set: v => updateSplit(sp.id, "litres", v) },
-              ...(miPpl ? [{ label: "$/L", val: miPpl.toString(), set: null }] : []),
-              { label: "Cost", val: sp._costOverride || mi.cost?.toFixed(2) || "", set: v => updateSplit(sp.id, "_costOverride", v) },
-            ];
-          } else if (isOther && ml) {
-            spRows = [
-              { label: "Equipment", val: sp.equipment, set: v => updateSplit(sp.id, "equipment", v) },
-              { label: "Fuel type", val: ml.fuelType || "", set: null },
-              { label: "Litres", val: ml.litres?.toString() || sp.litres, set: v => updateSplit(sp.id, "litres", v) },
-              { label: "$/L", val: ml.pricePerLitre?.toString() || globalPpl?.toString() || "", set: null },
-              { label: "Cost", val: sp._costOverride || ml.cost?.toFixed(2) || "", set: v => updateSplit(sp.id, "_costOverride", v) },
+              { label: "Matched to", val: (mi?.description || ml?.fuelType || "") + (mi?.quantity ? ` (${mi.quantity})` : ""), set: null },
+              { label: "Litres", val: displayLitres, set: v => updateSplit(sp.id, "litres", v) },
+              { label: "$/L", val: displayPpl, set: null },
+              { label: "Cost", val: displayCost, set: v => updateSplit(sp.id, "_costOverride", v) },
               { label: "Notes", val: sp.notes || "", set: v => updateSplit(sp.id, "notes", v) },
             ];
           } else if (isOther) {
@@ -4496,7 +4494,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             spRows = [
               { label: "Equipment", val: sp.equipment, set: v => updateSplit(sp.id, "equipment", v) },
               { label: "Litres", val: sp.litres, set: v => updateSplit(sp.id, "litres", v) },
-              ...(otherPpl ? [{ label: "$/L", val: otherPpl.toString(), set: null }] : []),
+              { label: "$/L", val: otherPpl?.toString() || globalPpl?.toString() || "", set: null },
               { label: "Cost", val: sp._costOverride || (otherCost ? otherCost.toFixed(2) : ""), set: v => updateSplit(sp.id, "_costOverride", v) },
               { label: "Notes", val: sp.notes || "", set: v => updateSplit(sp.id, "notes", v) },
             ];
