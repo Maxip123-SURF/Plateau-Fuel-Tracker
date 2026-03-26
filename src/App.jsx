@@ -3846,8 +3846,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       { label: "Litres", val: primaryLitres, set: v => { if (splitMode) setForm(f => ({...f, litres: v})); else setReceiptData(d => ({...d, litres: v, _rawLitres: v})); } },
       { label: "$/L", val: receiptData?._rawPpl || primaryPpl?.toString() || "", set: v => setReceiptData(d => ({...d, pricePerLitre: v, _rawPpl: v})) },
       { label: "Cost", val: primaryCost, set: v => setReceiptData(d => ({...d, totalCost: v, _rawCost: v})) },
-      { label: "Fleet card", val: cardData?.cardNumber || regoMatch?.c || "", set: v => setCardData(d => ({...(d || {}), cardNumber: v.replace(/\s/g, "")})) },
     ];
+
+    const cardRows = [
+      { label: "Card Number", val: cardData?.cardNumber || regoMatch?.c || "", set: v => setCardData(d => ({...(d || {}), cardNumber: v.replace(/\s/g, "")})) },
+      { label: "Card Rego", val: cardData?.vehicleOnCard || "", set: v => setCardData(d => ({...(d || {}), vehicleOnCard: v.toUpperCase()})) },
+    ];
+    const hasCardData = !!(cardData?.cardNumber || regoMatch?.c);
 
     // Pre-compute matched data for each split
     const splitPreviews = splits.map(sp => {
@@ -3878,7 +3883,12 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         {splitMode && (
           <div style={{ fontSize: 12, fontWeight: 700, color: "#15803d", marginBottom: 6 }}>Vehicle 1 (primary)</div>
         )}
-        <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden", marginBottom: splitMode ? 12 : 20 }}>
+
+        {/* Fuel Receipt Section */}
+        <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden", marginBottom: 12 }}>
+          <div style={{ background: "#f0fdf4", padding: "8px 14px", fontSize: 11, fontWeight: 700, color: "#15803d", letterSpacing: "0.04em", textTransform: "uppercase", borderBottom: "1px solid #86efac" }}>
+            {"\u26FD"} Fuel Receipt Details
+          </div>
           {vehicleRows.map(({ label, val, set }, i) => (
             <div key={label} style={rowStyle(i, vehicleRows.length)}>
               <span style={labelStyle}>{label}</span>
@@ -3890,6 +3900,27 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             </div>
           ))}
         </div>
+
+        {/* Fleet Card Section */}
+        {hasCardData && (
+          <div style={{ background: "white", border: "2px solid #fdba74", borderRadius: 10, overflow: "hidden", marginBottom: splitMode ? 12 : 20 }}>
+            <div style={{ background: "#fff7ed", padding: "10px 14px", borderBottom: "1px solid #fdba74" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#c2410c", letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                {"\uD83D\uDCB3"} Fleet Card Details
+              </div>
+              <div style={{ fontSize: 11, color: "#92400e", marginTop: 3, fontWeight: 500 }}>
+                {"\u26A0"} Please double-check the card number and rego below — AI scanning can misread embossed card text
+              </div>
+            </div>
+            {cardRows.map(({ label, val, set }, i) => (
+              <div key={label} style={rowStyle(i, cardRows.length)}>
+                <span style={labelStyle}>{label}</span>
+                <input value={val} onChange={e => set(e.target.value)} style={{...inputStyle, fontWeight: 700, color: "#c2410c"}} onFocus={focusStyle} onBlur={blurStyle} />
+              </div>
+            ))}
+          </div>
+        )}
+        {!hasCardData && <div style={{ marginBottom: splitMode ? 12 : 20 }} />}
 
         {/* Split entries — matched to scanned data */}
         {splitMode && splitPreviews.map((sp, si) => {
