@@ -2641,8 +2641,12 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
 
     const buildEntry = (rego, division, vehicleType, odometer, litres, regoMatch, matchedLine) => {
       const lineFuelType = matchedLine?.fuelType || baseFuelType || regoMatch?.f || "";
-      const linePpl = matchedLine?.pricePerLitre || ppl;
       const parsedLitres = parseFloat(litres) || null;
+      const lineCost = matchedLine?.cost || null;
+      // Recalculate price from cost ÷ litres (most reliable) — fallback to scanned price
+      const linePpl = (lineCost && parsedLitres && parsedLitres > 0)
+        ? parseFloat((lineCost / parsedLitres).toFixed(4))
+        : (matchedLine?.pricePerLitre || ppl);
       return {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         submittedAt: now,
@@ -2654,7 +2658,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         date,
         litres: parsedLitres,
         pricePerLitre: linePpl,
-        totalCost: matchedLine?.cost || ((parsedLitres || 0) * (linePpl || 0)) || null,
+        totalCost: lineCost || ((parsedLitres || 0) * (linePpl || 0)) || null,
         station,
         fuelType: lineFuelType,
         fleetCardNumber: cardNum || regoMatch?.c || "",
@@ -3924,14 +3928,25 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
 
     const primaryLine = splitMode && scannedLines[lineIdx] ? scannedLines[lineIdx++] : null;
     const primaryFuelType = primaryLine?.fuelType || receiptData?.fuelType || regoMatch?.f || "";
-    const primaryPpl = primaryLine?.pricePerLitre || globalPpl;
     const primaryLitres = splitMode
       ? (form.litres || primaryLine?.litres?.toString() || "0")
       : (receiptData?._rawLitres || receiptData?.litres?.toString() || "");
     const primaryCost = receiptData?._rawCost
       || (splitMode
-        ? (primaryLine?.cost?.toFixed(2) || (parseFloat(primaryLitres) * (primaryPpl || 0)).toFixed(2))
+        ? (primaryLine?.cost?.toFixed(2) || "")
         : (receiptData?.fuelCost?.toString() || receiptData?.totalCost?.toString() || ""));
+
+    // Recalculate price per litre from cost ÷ litres when user has entered their own litres
+    // This catches cases where AI reads wrong litres AND wrong price but correct cost
+    const userLitres = parseFloat(primaryLitres);
+    const lineCost = parseFloat(primaryCost);
+    let primaryPpl;
+    if (userLitres > 0 && lineCost > 0) {
+      // Always trust cost ÷ litres — this is the most reliable calculation
+      primaryPpl = parseFloat((lineCost / userLitres).toFixed(4));
+    } else {
+      primaryPpl = primaryLine?.pricePerLitre || globalPpl;
+    }
 
     const vehicleRows = [
       { label: "First Name", val: form.driverFirstName, set: v => setForm(f => ({...f, driverFirstName: v})) },
