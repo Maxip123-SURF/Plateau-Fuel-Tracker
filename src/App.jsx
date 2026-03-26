@@ -645,9 +645,23 @@ function normalizeReceiptData(data) {
     data.litres = parseFloat(lineSum.toFixed(2));
   }
 
-  // Calculate price per litre from totals if still missing
-  if (!data.pricePerLitre && data.litres && data.totalCost) {
-    data.pricePerLitre = parseFloat((data.totalCost / data.litres).toFixed(4));
+  // Update global pricePerLitre: recalculate if lines were corrected, or if missing
+  if (data.lines.some(l => l._corrected) && data.lines.length === 1 && data.lines[0].pricePerLitre) {
+    // Single fuel line was corrected — use its corrected price as the global price
+    data.pricePerLitre = data.lines[0].pricePerLitre;
+  } else if (data.litres && data.totalCost) {
+    // Always verify global price: cost ÷ litres should equal pricePerLitre
+    const calcGlobalPpl = parseFloat((data.totalCost / data.litres).toFixed(4));
+    if (!data.pricePerLitre) {
+      data.pricePerLitre = calcGlobalPpl;
+    } else {
+      // Check if existing price is wrong (doesn't match cost ÷ litres within 2%)
+      const pplDiff = Math.abs(data.pricePerLitre * data.litres - data.totalCost);
+      if (pplDiff > data.totalCost * 0.02 && pplDiff > 0.10) {
+        data._mathIssues.push(`Price/L corrected: $${data.pricePerLitre}/L × ${data.litres}L = $${(data.pricePerLitre * data.litres).toFixed(2)} but total is $${data.totalCost} → using $${calcGlobalPpl}/L`);
+        data.pricePerLitre = calcGlobalPpl;
+      }
+    }
   }
 
   // Verify total cost against sum of line costs (allow small difference for surcharges/discounts)
