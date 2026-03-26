@@ -2836,10 +2836,12 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       if (s.id !== id) return s;
       const updated = { ...s, [field]: value };
       if (field === "rego" && s.splitType === "vehicle") {
+        const isTypingMore = value.length > (s.rego || "").length;
         const match = lookupRego(value, learnedDBRef.current, entriesRef.current);
         updated._match = match || null;
         if (match) {
-          updated.rego = match.r || value; // Auto-fill full rego
+          // Only auto-fill when typing forward, not when deleting/editing
+          updated.rego = (isTypingMore && match.r && match.r.length > value.length) ? match.r : value;
           updated.division = match.d;
           updated.vehicleType = match.t;
         }
@@ -3148,11 +3150,14 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
         <FieldInput label="Registration Number" value={form.registration} required
           onChange={v => {
             v = v.toUpperCase();
+            const prevLen = form.registration.length;
+            const isTypingMore = v.length > prevLen;
             const db = learnedDBRef.current;
             const match = lookupRego(v, db, entriesRef.current);
             if (match) {
-              // Auto-fill the full rego if user typed a partial match (4+ chars) and we found the vehicle
-              const fullRego = match.r || v;
+              // Only auto-fill the full rego when user is typing forward (adding chars),
+              // not when deleting or editing — so the user can still make corrections
+              const fullRego = (isTypingMore && match.r && match.r.length > v.length) ? match.r : v;
               setForm(f => ({ ...f, registration: fullRego, vehicleType: match.t, division: match.d, _regoMatch: match }));
             } else {
               const vt = guessType(v, db, entriesRef.current);
