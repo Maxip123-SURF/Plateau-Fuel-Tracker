@@ -552,6 +552,11 @@ RULES:
 // Normalize receipt data: ensure lines array exists and totals are consistent
 function normalizeReceiptData(data) {
   if (!data) return data;
+  // DEBUG: Log raw AI output before any normalization
+  console.log("═══ RAW AI SCAN OUTPUT ═══");
+  console.log("totalCost:", data.totalCost, "litres:", data.litres, "pricePerLitre:", data.pricePerLitre);
+  console.log("lines:", JSON.stringify(data.lines, null, 2));
+  console.log("otherItems:", JSON.stringify(data.otherItems, null, 2));
   // Ensure lines array exists
   if (!data.lines || !Array.isArray(data.lines) || data.lines.length === 0) {
     data.lines = [{ litres: data.litres || null, cost: data.totalCost || null, pump: null, fuelType: data.fuelType || null }];
@@ -857,6 +862,13 @@ function normalizeReceiptData(data) {
   const fuelOnlyCost = data.lines.reduce((s, l) => s + (l.cost || 0), 0);
   data.fuelCost = fuelOnlyCost > 0 ? parseFloat(fuelOnlyCost.toFixed(2)) : data.totalCost;
   data.otherItemsCost = otherItemsCost > 0 ? parseFloat(otherItemsCost.toFixed(2)) : 0;
+
+  // DEBUG: Log final normalized output
+  console.log("═══ AFTER NORMALIZATION ═══");
+  console.log("totalCost:", data.totalCost, "litres:", data.litres, "pricePerLitre:", data.pricePerLitre, "fuelCost:", data.fuelCost);
+  console.log("lines:", JSON.stringify(data.lines, null, 2));
+  console.log("otherItems:", JSON.stringify(data.otherItems, null, 2));
+  if (data._mathIssues?.length) console.log("mathIssues:", data._mathIssues);
 
   return data;
 }
