@@ -2428,6 +2428,8 @@ export default function App() {
   const [vehicleMenu, setVehicleMenu] = useState(null); // rego string for open menu
   const [editingVehicle, setEditingVehicle] = useState(null); // rego string for edit vehicle modal
   const [manualEntry, setManualEntry] = useState(null); // { rego, division, vehicleType } for manual add
+  const [manualReceiptMode, setManualReceiptMode] = useState(false); // skip photo, enter receipt data manually
+  const [manualReceipt, setManualReceipt] = useState({ date: "", station: "", cardNumber: "", cardRego: "" });
   const [viewingReceipt, setViewingReceipt] = useState(null); // entry ID to view receipt
   const [confirmAction, setConfirmAction] = useState(null);
   const [addVehicle, setAddVehicle] = useState({ rego: "", div: "Tree", type: "Ute", name: "", owner: "", fuel: "Diesel" });
@@ -4175,11 +4177,198 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         </div>
       )}
 
+      {/* ── Manual entry toggle ── */}
+      {!receiptPreview && !receiptScanning && (
+        <div style={{ textAlign: "center", marginTop: 12 }}>
+          <button onClick={() => setManualReceiptMode(m => !m)} style={{
+            background: "none", border: "none", color: "#64748b", fontSize: 12, cursor: "pointer",
+            fontFamily: "inherit", textDecoration: "underline",
+          }}>{manualReceiptMode ? "Cancel manual entry" : "No photo? Enter details manually"}</button>
+        </div>
+      )}
+
+      {/* ── Manual receipt entry form ── */}
+      {manualReceiptMode && !receiptPreview && (
+        <div className="fade-in" style={{
+          background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10,
+          padding: "14px 16px", marginTop: 10,
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 10 }}>Manual Receipt Entry</div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Date *</label>
+              <input type="date" value={manualReceipt.date} onChange={e => setManualReceipt(r => ({ ...r, date: e.target.value }))}
+                style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
+                onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Petrol Station</label>
+              <input value={manualReceipt.station} onChange={e => setManualReceipt(r => ({ ...r, station: e.target.value }))} placeholder="e.g. BP Marsden Park"
+                style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
+                onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+            </div>
+          </div>
+
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#374151", marginBottom: 6 }}>Fleet Card</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Card Number</label>
+              <input value={manualReceipt.cardNumber} onChange={e => setManualReceipt(r => ({ ...r, cardNumber: e.target.value }))} placeholder="e.g. 7034 3051 1700 2350"
+                style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
+                onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Card Rego</label>
+              <input value={manualReceipt.cardRego} onChange={e => setManualReceipt(r => ({ ...r, cardRego: e.target.value.toUpperCase() }))} placeholder="e.g. DF25LB"
+                style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a", textTransform: "uppercase" }}
+                onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+            </div>
+          </div>
+
+          {/* Vehicle 1 fuel details */}
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#1e40af", marginBottom: 6 }}>Vehicle 1 — {form.registration || "Primary"}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Litres *</label>
+              <input value={manualReceipt.v1Litres || ""} onChange={e => setManualReceipt(r => ({ ...r, v1Litres: e.target.value }))} placeholder="e.g. 128.57" type="number" inputMode="decimal"
+                style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
+                onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>$/L *</label>
+              <input value={manualReceipt.v1Ppl || ""} onChange={e => setManualReceipt(r => ({ ...r, v1Ppl: e.target.value }))} placeholder="e.g. 2.979" type="number" inputMode="decimal"
+                style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
+                onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Total Cost *</label>
+              <input value={manualReceipt.v1Cost || ""} onChange={e => setManualReceipt(r => ({ ...r, v1Cost: e.target.value }))} placeholder="e.g. 383.01" type="number" inputMode="decimal"
+                style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
+                onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+            </div>
+          </div>
+
+          {/* Split vehicles — show entry fields for each */}
+          {splitMode && splits.map((sp, si) => {
+            const isVehicle = sp.splitType === "vehicle";
+            const label = isVehicle ? `Vehicle ${si + 2} — ${sp.rego || ""}` : `Other ${si + 2} — ${sp.equipment || ""}`;
+            const color = isVehicle ? "#1e40af" : "#854d0e";
+            const mKey = `sp_${sp.id}`;
+            return (
+              <div key={sp.id} style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color, marginBottom: 6 }}>{label}</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                  <div>
+                    <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Litres</label>
+                    <input value={manualReceipt[`${mKey}_litres`] || ""} onChange={e => setManualReceipt(r => ({ ...r, [`${mKey}_litres`]: e.target.value }))} placeholder="e.g. 13.03" type="number" inputMode="decimal"
+                      style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
+                      onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>$/L</label>
+                    <input value={manualReceipt[`${mKey}_ppl`] || ""} onChange={e => setManualReceipt(r => ({ ...r, [`${mKey}_ppl`]: e.target.value }))} placeholder="e.g. 1.999" type="number" inputMode="decimal"
+                      style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
+                      onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Cost</label>
+                    <input value={manualReceipt[`${mKey}_cost`] || ""} onChange={e => setManualReceipt(r => ({ ...r, [`${mKey}_cost`]: e.target.value }))} placeholder="e.g. 26.05" type="number" inputMode="decimal"
+                      style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
+                      onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          <button onClick={() => {
+            if (!manualReceipt.date) { setError("Please enter the receipt date."); return; }
+            const v1L = parseFloat(manualReceipt.v1Litres) || 0;
+            const v1Ppl = parseFloat(manualReceipt.v1Ppl) || 0;
+            const v1Cost = parseFloat(manualReceipt.v1Cost) || (v1L * v1Ppl) || 0;
+
+            // Build lines array — Vehicle 1 + any split vehicles
+            const lines = [{ litres: v1L, cost: v1Cost, pricePerLitre: v1Ppl || (v1L > 0 ? v1Cost / v1L : 0), fuelType: form._regoMatch?.f || "Diesel" }];
+            const otherItems = [];
+            let totalLitres = v1L;
+            let totalCost = v1Cost;
+
+            if (splitMode) {
+              for (const sp of splits) {
+                const mKey = `sp_${sp.id}`;
+                const spL = parseFloat(manualReceipt[`${mKey}_litres`]) || 0;
+                const spPpl = parseFloat(manualReceipt[`${mKey}_ppl`]) || 0;
+                const spCost = parseFloat(manualReceipt[`${mKey}_cost`]) || (spL * spPpl) || 0;
+                totalCost += spCost;
+
+                if (sp.splitType === "vehicle") {
+                  lines.push({ litres: spL, cost: spCost, pricePerLitre: spPpl || (spL > 0 ? spCost / spL : 0), fuelType: "Diesel" });
+                  totalLitres += spL;
+                } else {
+                  otherItems.push({ description: sp.equipment || "Other", litres: spL, cost: spCost, pricePerLitre: spPpl || (spL > 0 ? spCost / spL : 0) });
+                }
+              }
+            }
+
+            // Format date from yyyy-mm-dd to dd/mm/yyyy
+            const [y, m, d] = manualReceipt.date.split("-");
+            const formattedDate = `${d}/${m}/${y}`;
+
+            // Set receipt data as if scanned
+            setReceiptData({
+              date: formattedDate,
+              station: manualReceipt.station || "",
+              fuelType: lines[0]?.fuelType || "Diesel",
+              litres: totalLitres,
+              pricePerLitre: v1Ppl,
+              totalCost: totalCost,
+              fuelCost: lines.reduce((s, l) => s + (l.cost || 0), 0),
+              lines: lines.filter(l => l.litres > 0),
+              otherItems,
+              confidence: { overall: "manual", issues: [] },
+              _manualEntry: true,
+            });
+
+            // Set card data
+            const cleanCard = (manualReceipt.cardNumber || "").replace(/\s/g, "");
+            const cleanRego = (manualReceipt.cardRego || "").trim().toUpperCase();
+            if (cleanCard || cleanRego) {
+              const matched = fuzzyMatchFleetCard(cleanCard, cleanRego, learnedDBRef.current);
+              setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
+              if (cleanCard && cleanRego) learnFleetCardCorrection(cleanCard, cleanRego);
+            }
+
+            // Set form litres for Vehicle 1
+            if (v1L > 0) setForm(f => ({ ...f, litres: v1L.toString() }));
+
+            // Update split litres/ppl
+            if (splitMode) {
+              setSplits(prev => prev.map(sp => {
+                const mKey = `sp_${sp.id}`;
+                const spL = manualReceipt[`${mKey}_litres`] || sp.litres;
+                const spPpl = manualReceipt[`${mKey}_ppl`] || sp.ppl;
+                return { ...sp, litres: spL, ppl: spPpl };
+              }));
+            }
+
+            setManualReceiptMode(false);
+            setReceiptPreview("manual");
+            showToast("Manual receipt data saved");
+            setError("");
+          }} style={{
+            width: "100%", marginTop: 6, padding: "8px 14px", borderRadius: 8,
+            fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+            background: "#16a34a", color: "white", border: "none",
+          }}>Save & Continue</button>
+        </div>
+      )}
+
       {error && <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: 10, marginBottom: 12, marginTop: 12, fontSize: 13, color: "#b91c1c" }}>{error}</div>}
       <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
         <SecondaryBtn onClick={() => { setError(""); setStep(1); }}>{"\u2190"} Back</SecondaryBtn>
         <div style={{ flex: 1 }}>
-          <PrimaryBtn onClick={() => { document.activeElement?.blur(); setError(""); setStep(3); }} disabled={!receiptPreview || receiptScanning}>Review {"\u2192"}</PrimaryBtn>
+          <PrimaryBtn onClick={() => { document.activeElement?.blur(); setError(""); setStep(3); }} disabled={(!receiptPreview && !manualReceiptMode) || receiptScanning}>Review {"\u2192"}</PrimaryBtn>
         </div>
       </div>
     </div>
