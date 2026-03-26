@@ -583,21 +583,27 @@ function normalizeReceiptData(data) {
   const ppl = data.pricePerLitre;
   data._mathIssues = [];
 
+  // If there's only one fuel line and it's missing cost, inherit from totalCost
+  if (data.lines.length === 1 && !data.lines[0].cost && data.totalCost) {
+    data.lines[0].cost = data.totalCost;
+  }
+
   data.lines = data.lines.map((line, idx) => {
     const litres = line.litres;
     const cost = line.cost;
     const price = line.pricePerLitre || ppl;
 
     // Calculate missing value from the other two
+    // IMPORTANT: only fill in missing cost from price×litres AFTER cross-checking
     if (litres && cost && !line.pricePerLitre && !ppl) {
       // Have litres and cost, missing price → calculate it
       line.pricePerLitre = parseFloat((cost / litres).toFixed(4));
-    } else if (litres && price && !cost) {
-      // Have litres and price, missing cost → calculate it
-      line.cost = parseFloat((litres * price).toFixed(2));
     } else if (cost && price && !litres) {
       // Have cost and price, missing litres → calculate it
       line.litres = parseFloat((cost / price).toFixed(2));
+    } else if (litres && price && !cost) {
+      // Have litres and price, missing cost → calculate it (least reliable — derived from potentially wrong price)
+      line.cost = parseFloat((litres * price).toFixed(2));
     }
 
     // If all 3 exist, verify consistency
@@ -649,8 +655,9 @@ function normalizeReceiptData(data) {
   if (data.lines.some(l => l._corrected) && data.lines.length === 1 && data.lines[0].pricePerLitre) {
     // Single fuel line was corrected — use its corrected price as the global price
     data.pricePerLitre = data.lines[0].pricePerLitre;
-  } else if (data.litres && data.totalCost) {
-    // Always verify global price: cost ÷ litres should equal pricePerLitre
+  }
+  // Always verify global price against totalCost ÷ litres
+  if (data.litres && data.totalCost) {
     const calcGlobalPpl = parseFloat((data.totalCost / data.litres).toFixed(4));
     if (!data.pricePerLitre) {
       data.pricePerLitre = calcGlobalPpl;
@@ -660,6 +667,14 @@ function normalizeReceiptData(data) {
       if (pplDiff > data.totalCost * 0.02 && pplDiff > 0.10) {
         data._mathIssues.push(`Price/L corrected: $${data.pricePerLitre}/L × ${data.litres}L = $${(data.pricePerLitre * data.litres).toFixed(2)} but total is $${data.totalCost} → using $${calcGlobalPpl}/L`);
         data.pricePerLitre = calcGlobalPpl;
+        // Also fix line-level price to match
+        data.lines.forEach(l => {
+          if (l.litres && l.cost) {
+            l.pricePerLitre = parseFloat((l.cost / l.litres).toFixed(4));
+          } else if (l.litres) {
+            l.pricePerLitre = calcGlobalPpl;
+          }
+        });
       }
     }
   }
