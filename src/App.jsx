@@ -2881,12 +2881,14 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
         <div style={{ display: "flex", gap: 8 }}>
           <div style={{ flex: 1 }}>
             <FieldInput label="First Name" value={form.driverFirstName} onChange={v => {
-              setForm(f => ({ ...f, driverFirstName: v }));
+              const capitalized = v.charAt(0).toUpperCase() + v.slice(1);
+              setForm(f => ({ ...f, driverFirstName: capitalized }));
             }} placeholder="e.g. Jason" required />
           </div>
           <div style={{ flex: 1 }}>
             <FieldInput label="Last Name" value={form.driverLastName} onChange={v => {
-              setForm(f => ({ ...f, driverLastName: v }));
+              const capitalized = v.charAt(0).toUpperCase() + v.slice(1);
+              setForm(f => ({ ...f, driverLastName: capitalized }));
             }} placeholder="e.g. Johnston" required />
           </div>
         </div>
