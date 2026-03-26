@@ -765,7 +765,8 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB) {
     let bestRegoDist = Infinity;
     for (const known of allRegos) {
       const dist = editDistance(cleanScannedRego, known.rego);
-      const maxDist = known.rego.length >= 5 ? 2 : 1;
+      // Only allow 1-edit matches for regos — 2 edits on a 6-char string is too loose
+      const maxDist = 1;
       if (dist <= maxDist && dist < bestRegoDist) {
         bestRegoDist = dist;
         const cardMatch = knownCards.find(k => k.rego === known.rego);
@@ -799,31 +800,25 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB) {
         continue;
       }
 
-      // For 16-digit cards: focus on the unique last 8 digits
+      // For 16-digit cards: focus on the unique last 8 digits (first 8 are shared account prefix)
       if (knownClean.length >= 16 && cleanScannedCard.length >= 16) {
         const scannedUnique = cleanScannedCard.slice(-8);
         const knownUnique = knownClean.slice(-8);
         const uniqueDist = editDistance(scannedUnique, knownUnique);
-        const first4Match = cleanScannedCard.slice(0, 4) === knownClean.slice(0, 4);
-        const last4Match = cleanScannedCard.slice(-4) === knownClean.slice(-4);
+        const first8Match = cleanScannedCard.slice(0, 8) === knownClean.slice(0, 8);
 
-        // High confidence: last 8 digits are very close (<=2 edits) AND prefix matches
-        if (uniqueDist <= 2 && first4Match) {
+        // High confidence: last 8 unique digits are very close (<=2 edits) AND shared prefix matches
+        if (uniqueDist <= 2 && first8Match) {
           const score = uniqueDist === 0 ? 0 : 1;
           if (score < bestCardScore) { bestCardScore = score; bestCardMatch = known; }
           continue;
         }
-        // High confidence: prefix AND last 4 suffix match exactly
-        if (first4Match && last4Match) {
-          const score = 1;
-          if (score < bestCardScore) { bestCardScore = score; bestCardMatch = known; }
-          continue;
-        }
+        // Do NOT match on just prefix + last 4 suffix — the middle digits could be completely different
       }
     }
 
     // If we already have a rego match, only override with card match if the card match
-    // points to the SAME rego, or the card match is exact (dist <= 1)
+    // points to the SAME rego, or the card match is very confident (exact match)
     if (bestCardMatch) {
       if (!bestMatch) {
         // No rego match — use card match
@@ -832,8 +827,8 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB) {
       } else if (bestCardMatch.rego === bestMatch.rego) {
         // Card match confirms rego match — great, keep rego match (has correct card too)
         bestScore = 0;
-      } else if (bestCardScore <= 1 && bestScore > 1) {
-        // Card is near-exact but rego was a weak match — trust the card
+      } else if (bestCardScore === 0) {
+        // Card is exact match but rego pointed elsewhere — trust exact card match
         bestMatch = bestCardMatch;
         bestScore = bestCardScore;
       }
@@ -841,11 +836,11 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB) {
     }
   }
 
-  // Strategy 3: If no match yet but we have both signals, try rego-based card lookup
+  // Strategy 3: If no match yet but we have both signals, try rego-based card lookup (strict — 1 edit max)
   if (!bestMatch && cleanScannedRego && cleanScannedCard) {
     for (const known of knownCards) {
       const regoDist = editDistance(cleanScannedRego, known.rego);
-      if (regoDist <= 2) {
+      if (regoDist <= 1) {
         bestMatch = known;
         bestScore = 1;
         break;
