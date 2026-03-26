@@ -566,6 +566,12 @@ function normalizeReceiptData(data) {
         pricePerLitre: ab.pricePerLitre,
       });
     });
+    // CRITICAL: Recalculate data.litres after removing AdBlue from fuel lines
+    // The AI may have included AdBlue litres in the total
+    const fuelLitresAfterAdBlue = data.lines.reduce((s, l) => s + (l.litres || 0), 0);
+    if (fuelLitresAfterAdBlue > 0) {
+      data.litres = parseFloat(fuelLitresAfterAdBlue.toFixed(2));
+    }
   }
 
   // Filter out discount/surcharge/non-fuel lines that the AI might have included
@@ -583,6 +589,12 @@ function normalizeReceiptData(data) {
   // If all lines were filtered, create a fallback from totals
   if (data.lines.length === 0 && data.litres > 0) {
     data.lines = [{ litres: data.litres, cost: data.totalCost || null, pump: null, fuelType: data.fuelType || null }];
+  }
+
+  // ALWAYS recalculate data.litres from remaining fuel lines (after AdBlue removal + filters)
+  const postFilterLitres = data.lines.reduce((s, l) => s + (l.litres || 0), 0);
+  if (postFilterLitres > 0) {
+    data.litres = parseFloat(postFilterLitres.toFixed(2));
   }
 
   // Detect phantom/duplicate lines: if total line litres far exceeds reported total, lines are wrong
@@ -703,18 +715,24 @@ function normalizeReceiptData(data) {
     // Single fuel line was corrected — use its corrected price as the global price
     data.pricePerLitre = data.lines[0].pricePerLitre;
   }
-  // Always verify global price against totalCost ÷ litres
+  // Verify global price against FUEL-ONLY cost ÷ litres
+  // CRITICAL: totalCost includes surcharges + AdBlue — we must subtract non-fuel items
   if (data.litres && data.totalCost) {
-    const calcGlobalPpl = parseFloat((data.totalCost / data.litres).toFixed(4));
+    const otherItemsCostForPpl = data.otherItems.reduce((s, item) => s + (item.cost || 0), 0);
+    const fuelOnlyCostForPpl = data.totalCost - otherItemsCostForPpl;
+    // Only use fuel-only cost if it's reasonable (positive and not tiny)
+    const costForPpl = (fuelOnlyCostForPpl > 0 && fuelOnlyCostForPpl > data.totalCost * 0.3)
+      ? fuelOnlyCostForPpl : data.totalCost;
+    const calcGlobalPpl = parseFloat((costForPpl / data.litres).toFixed(4));
     if (!data.pricePerLitre) {
       data.pricePerLitre = calcGlobalPpl;
     } else {
-      // Check if existing price is wrong (doesn't match cost ÷ litres within 2%)
-      const pplDiff = Math.abs(data.pricePerLitre * data.litres - data.totalCost);
-      if (pplDiff > data.totalCost * 0.02 && pplDiff > 0.10) {
-        data._mathIssues.push(`Price/L corrected: $${data.pricePerLitre}/L × ${data.litres}L = $${(data.pricePerLitre * data.litres).toFixed(2)} but total is $${data.totalCost} → using $${calcGlobalPpl}/L`);
+      // Check if existing price is wrong (doesn't match fuel cost ÷ litres within 5%)
+      const pplDiff = Math.abs(data.pricePerLitre * data.litres - costForPpl);
+      if (pplDiff > costForPpl * 0.05 && pplDiff > 1.00) {
+        data._mathIssues.push(`Price/L corrected: $${data.pricePerLitre}/L × ${data.litres}L = $${(data.pricePerLitre * data.litres).toFixed(2)} but fuel cost is $${costForPpl.toFixed(2)} → using $${calcGlobalPpl}/L`);
         data.pricePerLitre = calcGlobalPpl;
-        // Also fix line-level price to match
+        // Also fix line-level price to match — but ONLY from each line's own data
         data.lines.forEach(l => {
           if (l.litres && l.cost) {
             l.pricePerLitre = parseFloat((l.cost / l.litres).toFixed(4));
@@ -737,7 +755,8 @@ function normalizeReceiptData(data) {
       const totalDiff = Math.abs(data.totalCost - expectedProductTotal);
 
       // If line costs are way off from receipt total (>15% and >$10), lines are likely wrong
-      if (totalDiff > data.totalCost * 0.15 && totalDiff > 10) {
+      // Allow up to $15 grace for surcharges/fees that aren't tracked as items
+      if (totalDiff > 15 && totalDiff > data.totalCost * 0.15) {
         data._mathIssues.push(`AI line costs ($${lineCostSum.toFixed(2)}) don't match receipt total ($${data.totalCost}) — recalculating`);
 
         // Recalculate: fuel cost = total - otherItems cost (allow ~$10 for surcharges)
@@ -2862,11 +2881,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     if (primaryLine) nextLineIdx++;
     const primaryLitres = splitMode
       ? (parseFloat(form.litres) || primaryLine?.litres || ((parsedLitresTotal || 0) - splits.reduce((s, sp) => s + (parseFloat(sp.litres) || 0), 0)))
-      : (parsedLitresTotal || primaryLine?.litres);
+      : (parseFloat(form.litres) || primaryLine?.litres || parsedLitresTotal);
+    // ALWAYS pass the primary fuel line data (not just in split mode)
+    // so buildEntry can use its cost/price instead of the global ppl
     const primaryEntry = buildEntry(
       form.registration.trim().toUpperCase(),
       form.division, form.vehicleType,
-      form.odometer, primaryLitres, primaryMatch, splitMode ? primaryLine : null
+      form.odometer, primaryLitres, primaryMatch, primaryLine
     );
 
     let allNew = entries;
