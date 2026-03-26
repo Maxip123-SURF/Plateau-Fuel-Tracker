@@ -2982,7 +2982,21 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       for (const sp of splits) {
         if (sp.splitType === "other") {
           if (!sp.equipment) continue;
-          const matchedOther = scannedOtherItems[nextOtherIdx] || null;
+          // Match otherItem by description similarity (not just index)
+          const equipLower = (sp.equipment || "").toLowerCase().trim();
+          let matchedOther = null;
+          for (let oi = nextOtherIdx; oi < scannedOtherItems.length; oi++) {
+            const desc = (scannedOtherItems[oi]?.description || "").toLowerCase();
+            if (desc.includes(equipLower) || equipLower.includes(desc) ||
+                (equipLower === "adblue" && /adblue|ad[\s-]*blue|def|urea/i.test(desc))) {
+              matchedOther = scannedOtherItems[oi];
+              if (oi === nextOtherIdx) nextOtherIdx++;
+              break;
+            }
+          }
+          if (!matchedOther && nextOtherIdx < scannedOtherItems.length) {
+            matchedOther = scannedOtherItems[nextOtherIdx++];
+          }
           const isFuelOther = FUEL_EQUIPMENT_RE.test(sp.equipment);
           const matchedFuelLine = isFuelOther ? findBestLine(sp) : null;
 
@@ -3188,7 +3202,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
   const EQUIPMENT_PRESETS = ["Chainsaws", "2 Stroke Fuel", "Jerry Can", "Engine Oil", "Chain & Bar Oil", "Stump Grinder", "Fuel Cell/Pod", "Leaf Blower", "AdBlue", "Hire Equipment"];
 
 // Equipment types that consume FUEL (not oil/adblue) — used to match "other" splits to fuel lines vs otherItems
-const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|fuel.?pod|mower|hedger|adblue/i;
+const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|fuel.?pod|mower|hedger/i;
 
   const renderStep1 = () => {
     const activeDivision = form.division ? DIVISIONS[form.division] : null;
@@ -4291,10 +4305,29 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       const isOther = sp.splitType === "other";
       const isFuelOther = isOther && FUEL_EQUIPMENT_RE.test(sp.equipment);
 
-      if (isOther && !isFuelOther && otherItemIdx < scannedOtherItems.length) {
-        // Non-fuel item → match to next otherItem
-        const item = scannedOtherItems[otherItemIdx++];
-        return { ...sp, _matchedItem: item, _matchedLine: null, _isFuelOther: false };
+      if (isOther && !isFuelOther) {
+        // Non-fuel item → match to scanned otherItem by description similarity
+        const equipLower = (sp.equipment || "").toLowerCase().trim();
+        // First try: find an otherItem whose description matches the equipment name
+        let matchedIdx = -1;
+        for (let oi = 0; oi < scannedOtherItems.length; oi++) {
+          const desc = (scannedOtherItems[oi]?.description || "").toLowerCase();
+          if (desc.includes(equipLower) || equipLower.includes(desc) ||
+              (equipLower === "adblue" && /adblue|ad[\s-]*blue|def|urea/i.test(desc))) {
+            matchedIdx = oi;
+            break;
+          }
+        }
+        // Fallback: use next available otherItem by index
+        if (matchedIdx < 0 && otherItemIdx < scannedOtherItems.length) {
+          matchedIdx = otherItemIdx;
+        }
+        if (matchedIdx >= 0 && matchedIdx < scannedOtherItems.length) {
+          const item = scannedOtherItems[matchedIdx];
+          if (matchedIdx === otherItemIdx) otherItemIdx++;
+          return { ...sp, _matchedItem: item, _matchedLine: null, _isFuelOther: false };
+        }
+        return { ...sp, _matchedLine: null, _matchedItem: null, _isFuelOther: false };
       } else if ((isOther && isFuelOther) || !isOther) {
         // Fuel-type — smart match from remaining available lines
         let line = null;
