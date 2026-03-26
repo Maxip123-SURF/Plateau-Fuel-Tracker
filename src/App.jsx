@@ -275,7 +275,7 @@ function getDisplayLabel(vehicleType, division) {
 // ─── Utilities ─────────────────────────────────────────────────────────────
 // ─── Driver Fleet Card Database (from fleet card spreadsheet) ───────────
 const DRIVER_CARDS = [
-{n:"KYLE OSBORNE",c:"7034305113700650",r:"AP85DF"},{n:"JASON SORBARA",c:"7034305108940667",r:"AT13VE"},{n:"NAISH",c:"7034305107330928",r:"BF51KJ"},{n:"JUSTIN LEWIS",c:"7034305116558659",r:"BJ57HC"},{n:"NICK JONES",c:"7034305115783134",r:"BR22ZZ"},{n:"JASON HUGHES",c:"7034305105574238",r:"BT08QM"},{n:"BRENDAN RICHARDSON",c:"7034305110165261",r:"BY38KR"},{n:"LUKE BARTLEY",c:"7034305106436460",r:"CA10BL"},{n:"BILLY PRICE",c:"7034305113893588",r:"CC24TI"},{n:"GAB FITZGERALD",c:"7034305111758833",r:"CC94JL"},{n:"JOE HUTTON",c:"7034305106228180",r:"CD36PH"},{n:"RACHAEL KEATING",c:"7034305106786955",r:"CH90KL"},{n:"DANIEL THOMSON",c:"7034305108274448",r:"CH95ZD"},{n:"KYLE OSBORNE",c:"7034305109332146",r:"CI98BZ"},{n:"KEV CARRILLO",c:"7034305108260140",r:"CJ55FB"},{n:"DAN THOMPSON",c:"7034305107310136",r:"CL52NS"},{n:"BILLY PRICE",c:"7034305116027192",r:"CM77KG"},{n:"CHRIS PLAYER",c:"7034305117020659",r:"CN47HS"},{n:"SHAUN COLE",c:"7034305113746059",r:"CP60AF"},{n:"DENNIS KOCJANCIC",c:"7034305116296961",r:"CP06YZ"},{n:"SHANE DEMIRAL",c:"7034305112151236",r:"CT74KE"},{n:"SAXON",c:"7034305106890443",r:"CV14NO"},{n:"LAURA HARDWOOD",c:"7034305114887118",r:"CX22BE"},{n:"MICK THOMAS",c:"7034305106791179",r:"CX23BE"},{n:"JAYDEN STRONG",c:"7034305112823891",r:"DB78SC"},{n:"KYLE OSBORNE",c:"7034305117002350",r:"DF25LB"},{n:"JACOB DEVEIGNE",c:"7034305110028204",r:"DF26LB"},{n:"ALEX GLYNN",c:"7034305112341555",r:"DI05QD"},{n:"DAMIAN SEMPEL",c:"7034305116822212",r:"CS63LP"},{n:"JACOB DEVEIGNE",c:"703430513408",r:"DP60DA"},{n:"BRETT SONTER",c:"7034305108863984",r:"DPL85C"},{n:"TIM PRICE",c:"7034305114660168",r:"DP90CQ"},{n:"JASON HUGHES",c:"7034305112129919",r:"DSU65Y"},{n:"PHIL CARSON",c:"7034305108545714",r:"DSU65Y"},{n:"SONYA",c:"7034305114570151",r:"EAE28V"},{n:"SAM LAW",c:"7034305113442394",r:"EBL30C"},{n:"AMELIA PLUMMER",c:"7034305115642942",r:"ECE83U"},{n:"LEE DAVIS",c:"7034305107318832",r:"EES53B"},{n:"JOE PELLIZZON",c:"7034305117257665",r:"EYO62W"},{n:"JOHN LARGEY",c:"7034305111069538",r:"EOL97X"},{n:"MARTIN HOWARD",c:"7034305113441354",r:"EQE85L"},{n:"BJ",c:"7034305110325493",r:"EQP77D"},{n:"JOE HURST",c:"7034305112846991",r:"EQP77E"},{n:"RHYS DWYER",c:"7034305109386829",r:"ERQ21S"},{n:"ANT YOUNGMAN",c:"7034305105562266",r:"EVA47B"},{n:"DECLAN KANE",c:"7034305107192484",r:"EYN61Z"},{n:"DAYNE COOMBE",c:"7034305107009274",r:"EYO02K"},{n:"CASS CHAPPLE",c:"7034305107286914",r:"EYP02J"},{n:"DANE PLUMMER",c:"7034305116249275",r:"FGP29X"},{n:"TONY PLUMMER",c:"7034305111220834",r:"FHX25L"},{n:"JOE DALEY",c:"7034305116246156",r:"FMT17H"},{n:"JASON JOHNSON",c:"7034305113817595",r:"JCJ010"},{n:"CAM WILLIAMS",c:"7034305105984726",r:"MISC3"},{n:"CARLOS CARRILLO",c:"7034305115254565",r:"WIA53F"},{n:"WADE HANNELL",c:"7034305116506179",r:"WNU522"},{n:"OLD BOGIE",c:"7034305111430383",r:"XN56BU"},{n:"NATHAN MORALES",c:"7034305110311667",r:"XN59QZ"},{n:"SCOTT WOOD",c:"7034305110006994",r:"XN95CF"},{n:"ALEX GLYNN",c:"7034305116398783",r:"XO05MA"},{n:"MATTHEW BROCK",c:"7034305108678176",r:"XO05RX"},{n:"MATT ROGERS",c:"7034305111375786",r:"XO08FN"},{n:"MAROS MENCAK",c:"7034305111698906",r:"XO20NL"},{n:"TIM PRICE",c:"7034305113655797",r:"XO49LN"},{n:"SHAUN DENNISON",c:"7034305110811948",r:"XO96XP"},{n:"STEVE NEWTON",c:"7034305111299762",r:"XP058N"},{n:"DOUG GRANT",c:"7034305116197722",r:"XP31AG"},{n:"JASON HUGHES",c:"7034305116247253",r:"XP41MC"},{n:"JASON SORBARA",c:"7034305117860930",r:"XP86LM"},{n:"ROGER BORG",c:"7034305106723230",r:"YMN14E"},{n:"MATHEW BROCK",c:"7034305108678176",r:"XO05RX"}
+{n:"KYLE OSBORNE",c:"7034305113700650",r:"AP85DF"},{n:"JASON SORBARA",c:"7034305108940667",r:"AT13VE"},{n:"NAISH",c:"7034305107330928",r:"BF51KJ"},{n:"JUSTIN LEWIS",c:"7034305116558659",r:"BJ57HC"},{n:"NICK JONES",c:"7034305115783134",r:"BR22ZZ"},{n:"JASON HUGHES",c:"7034305105574238",r:"BT08QM"},{n:"BRENDAN RICHARDSON",c:"7034305110165261",r:"BY38KR"},{n:"LUKE BARTLEY",c:"7034305106436460",r:"CA10BL"},{n:"BILLY PRICE",c:"7034305113893588",r:"CC24TI"},{n:"GAB FITZGERALD",c:"7034305111758833",r:"CC94JL"},{n:"JOE HUTTON",c:"7034305106228180",r:"CD36PH"},{n:"RACHAEL KEATING",c:"7034305106786955",r:"CH90KL"},{n:"DANIEL THOMSON",c:"7034305108274448",r:"CH95ZD"},{n:"KYLE OSBORNE",c:"7034305109332146",r:"CI98BZ"},{n:"KEV CARRILLO",c:"7034305108260140",r:"CJ55FB"},{n:"DAN THOMPSON",c:"7034305107310136",r:"CL52NS"},{n:"BILLY PRICE",c:"7034305116027192",r:"CM77KG"},{n:"CHRIS PLAYER",c:"7034305117020659",r:"CN47HS"},{n:"SHAUN COLE",c:"7034305113746059",r:"CP60AF"},{n:"DENNIS KOCJANCIC",c:"7034305116296961",r:"CP06YZ"},{n:"SHANE DEMIRAL",c:"7034305112151236",r:"CT74KE"},{n:"SAXON",c:"7034305106890443",r:"CV14NO"},{n:"LAURA HARDWOOD",c:"7034305114887118",r:"CX22BE"},{n:"MICK THOMAS",c:"7034305106791179",r:"CX23BE"},{n:"JAYDEN STRONG",c:"7034305112823891",r:"DB78SC"},{n:"KYLE OSBORNE",c:"7034305117002350",r:"DF25LB"},{n:"JACOB DEVEIGNE",c:"7034305110028204",r:"DF26LB"},{n:"ALEX GLYNN",c:"7034305112341555",r:"DI05QD"},{n:"DAMIAN SEMPEL",c:"7034305116822212",r:"CS63LP"},{n:"JACOB DEVEIGNE",c:"7034305117003408",r:"DP60DA"},{n:"BRETT SONTER",c:"7034305108863984",r:"DPL85C"},{n:"TIM PRICE",c:"7034305114660168",r:"DP90CQ"},{n:"JASON HUGHES",c:"7034305112129919",r:"DSU65Y"},{n:"PHIL CARSON",c:"7034305108545714",r:"DSU65Y"},{n:"SONYA",c:"7034305114570151",r:"EAE28V"},{n:"SAM LAW",c:"7034305113442394",r:"EBL30C"},{n:"AMELIA PLUMMER",c:"7034305115642942",r:"ECE83U"},{n:"LEE DAVIS",c:"7034305107318832",r:"EES53B"},{n:"JOE PELLIZZON",c:"7034305117257665",r:"EYO62W"},{n:"JOHN LARGEY",c:"7034305111069538",r:"EOL97X"},{n:"MARTIN HOWARD",c:"7034305113441354",r:"EQE85L"},{n:"BJ",c:"7034305110325493",r:"EQP77D"},{n:"JOE HURST",c:"7034305112846991",r:"EQP77E"},{n:"RHYS DWYER",c:"7034305109386829",r:"ERQ21S"},{n:"ANT YOUNGMAN",c:"7034305105562266",r:"EVA47B"},{n:"DECLAN KANE",c:"7034305107192484",r:"EYN61Z"},{n:"DAYNE COOMBE",c:"7034305107009274",r:"EYO02K"},{n:"CASS CHAPPLE",c:"7034305107286914",r:"EYP02J"},{n:"DANE PLUMMER",c:"7034305116249275",r:"FGP29X"},{n:"TONY PLUMMER",c:"7034305111220834",r:"FHX25L"},{n:"JOE DALEY",c:"7034305116246156",r:"FMT17H"},{n:"JASON JOHNSON",c:"7034305113817595",r:"JCJ010"},{n:"CAM WILLIAMS",c:"7034305105984726",r:"MISC3"},{n:"CARLOS CARRILLO",c:"7034305115254565",r:"WIA53F"},{n:"WADE HANNELL",c:"7034305116506179",r:"WNU522"},{n:"OLD BOGIE",c:"7034305111430383",r:"XN56BU"},{n:"NATHAN MORALES",c:"7034305110311667",r:"XN59QZ"},{n:"SCOTT WOOD",c:"7034305110006994",r:"XN95CF"},{n:"ALEX GLYNN",c:"7034305116398783",r:"XO05MA"},{n:"MATTHEW BROCK",c:"7034305108678176",r:"XO05RX"},{n:"MATT ROGERS",c:"7034305111375786",r:"XO08FN"},{n:"MAROS MENCAK",c:"7034305111698906",r:"XO20NL"},{n:"TIM PRICE",c:"7034305113655797",r:"XO49LN"},{n:"SHAUN DENNISON",c:"7034305110811948",r:"XO96XP"},{n:"STEVE NEWTON",c:"7034305111299762",r:"XP058N"},{n:"DOUG GRANT",c:"7034305116197722",r:"XP31AG"},{n:"JASON HUGHES",c:"7034305116247253",r:"XP41MC"},{n:"JASON SORBARA",c:"7034305117860930",r:"XP86LM"},{n:"ROGER BORG",c:"7034305106723230",r:"YMN14E"},{n:"MATHEW BROCK",c:"7034305108678176",r:"XO05RX"}
 ];
 
 // Lookup fleet cards by driver name — fuzzy match, returns all cards for that person
@@ -694,71 +694,11 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB) {
     return score;
   };
 
-  // Strategy 1: Match by fleet card number (smart multi-signal matching)
-  // Fleet cards share a common 8-digit account prefix (e.g. 70343051) — the LAST 8 digits
-  // are what uniquely identify each card. Focus matching on those unique digits.
-  if (cleanScannedCard && cleanScannedCard.length >= 6) {
-    for (const known of knownCards) {
-      const knownClean = known.card.toUpperCase();
-      // Same length check (cards should be same format)
-      if (Math.abs(cleanScannedCard.length - knownClean.length) > 2) continue;
+  // PRIORITY: When BOTH card and rego are scanned, find the best match using BOTH signals.
+  // The rego is the most reliable identifier (shorter, easier to read), so it takes priority.
 
-      const dist = editDistance(cleanScannedCard, knownClean);
-      // Exact or near-exact match (0-2 edits) — high confidence
-      if (dist <= 2 && dist < bestScore) {
-        bestScore = dist;
-        bestMatch = known;
-        continue;
-      }
-
-      // For 16-digit cards: focus on the unique last 8 digits
-      // First 8 digits are shared account prefix across all fleet cards
-      if (knownClean.length >= 12) {
-        const scannedUnique = cleanScannedCard.slice(-8); // Last 8 = unique card ID
-        const knownUnique = knownClean.slice(-8);
-        const uniqueDist = editDistance(scannedUnique, knownUnique);
-        const uniqueMatches = digitMatchScore(scannedUnique, knownUnique);
-        const first4Match = cleanScannedCard.slice(0, 4) === knownClean.slice(0, 4);
-        const last3Match = cleanScannedCard.slice(-3) === knownClean.slice(-3);
-        const last4Match = cleanScannedCard.slice(-4) === knownClean.slice(-4);
-
-        // High confidence: last 8 digits are close (<=3 edits) — the unique part mostly matches
-        if (uniqueDist <= 3 && first4Match) {
-          const score = uniqueDist === 0 ? 0 : 1;
-          if (score < bestScore) { bestScore = score; bestMatch = known; }
-          continue;
-        }
-        // High confidence: prefix AND suffix match (anchored at both ends)
-        if (first4Match && (last3Match || last4Match)) {
-          const score = 1;
-          if (score < bestScore) { bestScore = score; bestMatch = known; }
-          continue;
-        }
-        // Medium confidence: last 3-4 digits match and >50% of unique digits match
-        if ((last3Match || last4Match) && uniqueMatches >= 4) {
-          const score = 2;
-          if (score < bestScore) { bestScore = score; bestMatch = known; }
-          continue;
-        }
-        // Medium confidence: prefix matches and >50% of unique digits match
-        if (first4Match && uniqueMatches >= 4) {
-          const score = 2;
-          if (score < bestScore) { bestScore = score; bestMatch = known; }
-          continue;
-        }
-        // Lower confidence: >60% of all digits match positionally
-        const posMatches = digitMatchScore(cleanScannedCard, knownClean);
-        const matchRatio = posMatches / Math.max(cleanScannedCard.length, knownClean.length);
-        if (matchRatio > 0.6 && cleanScannedCard.length === knownClean.length) {
-          const score = 3;
-          if (score < bestScore) { bestScore = score; bestMatch = known; }
-          continue;
-        }
-      }
-    }
-  }
-
-  // Strategy 2: Match by vehicle registration (fuzzy)
+  // Strategy 1: Match by rego FIRST (most reliable — shorter text, easier for AI to read)
+  let regoMatch = null;
   if (cleanScannedRego && cleanScannedRego.length >= 3) {
     const allRegos = REGO_DB.map(v => ({ rego: v.r.toUpperCase().replace(/\s+/g, ""), source: v }));
     if (learnedDB) {
@@ -766,21 +706,87 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB) {
         allRegos.push({ rego: rego.toUpperCase().replace(/\s+/g, ""), source: data });
       });
     }
+    let bestRegoDist = Infinity;
     for (const known of allRegos) {
       const dist = editDistance(cleanScannedRego, known.rego);
       const maxDist = known.rego.length >= 5 ? 2 : 1;
-      if (dist <= maxDist && dist < bestScore) {
-        bestScore = dist;
+      if (dist <= maxDist && dist < bestRegoDist) {
+        bestRegoDist = dist;
         const cardMatch = knownCards.find(k => k.rego === known.rego);
-        bestMatch = cardMatch || { card: "", rego: known.rego, source: known.source };
+        regoMatch = cardMatch || { card: "", rego: known.rego, source: known.source };
       }
+    }
+    // If rego matched, use it as our best match — rego is the most reliable signal
+    if (regoMatch) {
+      bestMatch = regoMatch;
+      bestScore = bestRegoDist;
     }
   }
 
-  // Strategy 3: If no card match yet but we matched a rego, find that rego's card
-  // Also if we have BOTH a card and rego scan, use the rego to validate/find the right card
+  // Strategy 2: Match by fleet card number (only if rego didn't match, or to confirm rego match)
+  if (cleanScannedCard && cleanScannedCard.length >= 6) {
+    let bestCardMatch = null;
+    let bestCardScore = Infinity;
+
+    for (const known of knownCards) {
+      const knownClean = known.card.toUpperCase();
+      // Skip cards with very different length
+      if (Math.abs(cleanScannedCard.length - knownClean.length) > 2) continue;
+      // Skip incomplete card numbers (less than 16 digits)
+      if (knownClean.length < 16 && cleanScannedCard.length >= 16) continue;
+
+      const dist = editDistance(cleanScannedCard, knownClean);
+      // Exact or near-exact match (0-2 edits) — high confidence
+      if (dist <= 2 && dist < bestCardScore) {
+        bestCardScore = dist;
+        bestCardMatch = known;
+        continue;
+      }
+
+      // For 16-digit cards: focus on the unique last 8 digits
+      if (knownClean.length >= 16 && cleanScannedCard.length >= 16) {
+        const scannedUnique = cleanScannedCard.slice(-8);
+        const knownUnique = knownClean.slice(-8);
+        const uniqueDist = editDistance(scannedUnique, knownUnique);
+        const first4Match = cleanScannedCard.slice(0, 4) === knownClean.slice(0, 4);
+        const last4Match = cleanScannedCard.slice(-4) === knownClean.slice(-4);
+
+        // High confidence: last 8 digits are very close (<=2 edits) AND prefix matches
+        if (uniqueDist <= 2 && first4Match) {
+          const score = uniqueDist === 0 ? 0 : 1;
+          if (score < bestCardScore) { bestCardScore = score; bestCardMatch = known; }
+          continue;
+        }
+        // High confidence: prefix AND last 4 suffix match exactly
+        if (first4Match && last4Match) {
+          const score = 1;
+          if (score < bestCardScore) { bestCardScore = score; bestCardMatch = known; }
+          continue;
+        }
+      }
+    }
+
+    // If we already have a rego match, only override with card match if the card match
+    // points to the SAME rego, or the card match is exact (dist <= 1)
+    if (bestCardMatch) {
+      if (!bestMatch) {
+        // No rego match — use card match
+        bestMatch = bestCardMatch;
+        bestScore = bestCardScore;
+      } else if (bestCardMatch.rego === bestMatch.rego) {
+        // Card match confirms rego match — great, keep rego match (has correct card too)
+        bestScore = 0;
+      } else if (bestCardScore <= 1 && bestScore > 1) {
+        // Card is near-exact but rego was a weak match — trust the card
+        bestMatch = bestCardMatch;
+        bestScore = bestCardScore;
+      }
+      // Otherwise keep the rego match — rego is more reliable than card OCR
+    }
+  }
+
+  // Strategy 3: If no match yet but we have both signals, try rego-based card lookup
   if (!bestMatch && cleanScannedRego && cleanScannedCard) {
-    // Try to find a known card where the rego matches closely
     for (const known of knownCards) {
       const regoDist = editDistance(cleanScannedRego, known.rego);
       if (regoDist <= 2) {
