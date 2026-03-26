@@ -550,15 +550,13 @@ function normalizeReceiptData(data) {
   });
 
   // Move AdBlue/DEF from fuel lines to otherItems (AdBlue is NOT fuel)
-  const adblueLines = data.lines.filter(line => {
-    const ft = (line.fuelType || "").toLowerCase();
-    return /adblue|ad\s*blue|def\b|diesel\s*exhaust/i.test(ft);
-  });
+  const isAdBlue = (fuelType) => {
+    const ft = (fuelType || "").toLowerCase();
+    return /adblue|ad[\s-]*blue|def\b|diesel\s*exhaust|exhaust\s*fluid|urea|aus\s*32/i.test(ft);
+  };
+  const adblueLines = data.lines.filter(line => isAdBlue(line.fuelType));
   if (adblueLines.length > 0) {
-    data.lines = data.lines.filter(line => {
-      const ft = (line.fuelType || "").toLowerCase();
-      return !/adblue|ad\s*blue|def\b|diesel\s*exhaust/i.test(ft);
-    });
+    data.lines = data.lines.filter(line => !isAdBlue(line.fuelType));
     adblueLines.forEach(ab => {
       data.otherItems.push({
         description: ab.fuelType || "AdBlue",
@@ -753,18 +751,60 @@ function normalizeReceiptData(data) {
           }
           data.lines[0]._corrected = true;
         } else {
-          // Multiple fuel lines — try to redistribute based on litres ratio
+          // Multiple fuel lines — SMART redistribution that preserves per-line pricing
+          // DO NOT blindly redistribute by litres ratio — that gives all lines the same $/L
+          // Instead: trust lines whose own math is internally consistent
           const totalLitres = data.lines.reduce((s, l) => s + (l.litres || 0), 0);
           if (totalLitres > 0) {
+            // Step 1: Check which lines have internally consistent data
+            // A line is "trustworthy" if cost/litres gives a reasonable fuel price ($0.80-$5.00/L)
+            const REASONABLE_MIN = 0.80;
+            const REASONABLE_MAX = 5.00;
+            let trustedCostSum = 0;
+            let untrustedLitresSum = 0;
+
             data.lines = data.lines.map(l => {
-              if (l.litres && l.litres > 0) {
-                const proportion = l.litres / totalLitres;
-                l.cost = parseFloat((fuelCost * proportion).toFixed(2));
-                l.pricePerLitre = parseFloat((l.cost / l.litres).toFixed(4));
-                l._corrected = true;
+              if (l.litres && l.litres > 0 && l.cost && l.cost > 0) {
+                const linePpl = l.cost / l.litres;
+                if (linePpl >= REASONABLE_MIN && linePpl <= REASONABLE_MAX) {
+                  // This line's own math produces a reasonable price — trust it
+                  l.pricePerLitre = parseFloat(linePpl.toFixed(4));
+                  l._trusted = true;
+                  trustedCostSum += l.cost;
+                } else {
+                  l._trusted = false;
+                  untrustedLitresSum += l.litres;
+                }
+              } else {
+                l._trusted = false;
+                untrustedLitresSum += (l.litres || 0);
               }
               return l;
             });
+
+            // Step 2: For untrusted lines, assign remaining cost
+            const remainingCost = fuelCost - trustedCostSum;
+            if (remainingCost > 0 && untrustedLitresSum > 0) {
+              data.lines = data.lines.map(l => {
+                if (!l._trusted && l.litres && l.litres > 0) {
+                  const proportion = l.litres / untrustedLitresSum;
+                  l.cost = parseFloat((remainingCost * proportion).toFixed(2));
+                  l.pricePerLitre = parseFloat((l.cost / l.litres).toFixed(4));
+                  l._corrected = true;
+                }
+                return l;
+              });
+            }
+
+            // Step 3: If ALL lines are trusted but their sum doesn't match fuelCost,
+            // check if the difference is small enough to ignore (rounding), otherwise
+            // keep the trusted per-line data anyway (better to have correct $/L than force totals)
+            if (untrustedLitresSum === 0 && Math.abs(trustedCostSum - fuelCost) > 0.50) {
+              data._mathIssues.push(`Line costs sum ($${trustedCostSum.toFixed(2)}) differs from fuel total ($${fuelCost.toFixed(2)}) but per-line prices look correct — keeping individual line prices`);
+            }
+
+            // Cleanup temp flags
+            data.lines.forEach(l => { delete l._trusted; });
           }
         }
       }
