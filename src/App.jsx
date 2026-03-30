@@ -63,6 +63,7 @@ const db = {
         _aiConfidence: meta._aiConfidence || null,
         _aiIssues: meta._aiIssues || [],
         receiptUrl: meta.receiptUrl || null,
+        linkedVehicle: meta.linkedVehicle || null,
       };
     });
   },
@@ -103,6 +104,7 @@ const db = {
         _aiConfidence: entry._aiConfidence || null,
         _aiIssues: entry._aiIssues || [],
         receiptUrl: entry.receiptUrl || null,
+        linkedVehicle: entry.linkedVehicle || null,
       },
     });
     if (error) console.error("DB saveEntry:", error);
@@ -3104,6 +3106,9 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           // User override from review step takes priority
           if (sp._costOverride) cost = parseFloat(sp._costOverride) || cost;
 
+          // Link AdBlue/other items to the primary vehicle from this receipt
+          const linkedRego = form.registration?.trim().toUpperCase() || null;
+
           const otherSplitEntry = {
             id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             submittedAt: now,
@@ -3122,6 +3127,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             notes,
             splitReceipt: true,
             hasReceipt: !!receiptB64,
+            linkedVehicle: linkedRego,
           };
           allNew = [...allNew, otherSplitEntry];
           createdIds.push(otherSplitEntry.id);
@@ -5583,6 +5589,33 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                                   ))}
                                 </div>
                               )}
+
+                              {/* Linked Oil & Other items (AdBlue etc.) */}
+                              {(() => {
+                                const linkedOthers = entries.filter(e => e.entryType === "other" && e.linkedVehicle && e.linkedVehicle.toUpperCase() === rego.toUpperCase());
+                                if (linkedOthers.length === 0) return null;
+                                return (
+                                  <div style={{ marginTop: 8, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "8px 12px" }}>
+                                    <div style={{ fontSize: 11, fontWeight: 700, color: "#1e40af", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                                      <span style={{ fontSize: 14 }}>{"\uD83D\uDCA7"}</span> Linked Oil & Other Items
+                                    </div>
+                                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                      {linkedOthers.map((lo, li) => (
+                                        <div key={li} style={{
+                                          background: "white", border: "1px solid #93c5fd", borderRadius: 6,
+                                          padding: "4px 10px", fontSize: 11, display: "flex", alignItems: "center", gap: 8,
+                                        }}>
+                                          <span style={{ fontWeight: 700, color: "#1e40af" }}>{lo.itemDescription || lo.fuelType || "Other"}</span>
+                                          {lo.litres != null && <span style={{ color: "#374151" }}>{lo.litres}L</span>}
+                                          {lo.pricePerLitre != null && <span style={{ color: "#64748b" }}>${lo.pricePerLitre}/L</span>}
+                                          {lo.totalCost != null && <span style={{ color: "#16a34a", fontWeight: 600 }}>${lo.totalCost.toFixed(2)}</span>}
+                                          {lo.date && <span style={{ color: "#94a3b8" }}>{lo.date}</span>}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           )}
                         </div>
