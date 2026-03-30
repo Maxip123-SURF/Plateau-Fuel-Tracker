@@ -3786,11 +3786,19 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
                         onFocus={e => e.target.style.borderColor = "#fde047"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
                     </div>
                     <div>
-                      <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Notes <span style={{ fontWeight: 400, color: "#94a3b8" }}>(opt)</span></label>
-                      <input value={sp.notes} onChange={e => updateSplit(sp.id, "notes", e.target.value)} placeholder="e.g. for truck"
+                      <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Total Cost <span style={{ fontWeight: 400, color: "#94a3b8" }}>(opt)</span></label>
+                      <input value={sp.totalCost || ""} onChange={e => updateSplit(sp.id, "totalCost", e.target.value)}
+                        placeholder={(() => { const l = parseFloat(sp.litres) || 0; const p = parseFloat(sp.ppl) || 0; return l > 0 && p > 0 ? `$${(l * p).toFixed(2)}` : "e.g. 26.05"; })()}
+                        type="number" inputMode="decimal"
                         style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
                         onFocus={e => e.target.style.borderColor = "#fde047"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
                     </div>
+                  </div>
+                  <div style={{ marginTop: 8 }}>
+                    <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Notes <span style={{ fontWeight: 400, color: "#94a3b8" }}>(opt)</span></label>
+                    <input value={sp.notes} onChange={e => updateSplit(sp.id, "notes", e.target.value)} placeholder="e.g. for truck"
+                      style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
+                      onFocus={e => e.target.style.borderColor = "#fde047"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
                   </div>
                 </>
               ) : (
