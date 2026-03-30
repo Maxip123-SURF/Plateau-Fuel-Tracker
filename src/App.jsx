@@ -2419,6 +2419,7 @@ export default function App() {
   const [expandedFuelType, setExpandedFuelType] = useState(null);
   const [collapsedFleetGroups, setCollapsedFleetGroups] = useState({});
   const [vehicleSpendSort, setVehicleSpendSort] = useState("cost-desc");
+  const [showAddVehicleData, setShowAddVehicleData] = useState(false);
   const [dashPeriod, setDashPeriod] = useState("monthly"); // "daily" | "weekly" | "monthly" | "custom" | "all"
   const [dashDate, setDashDate] = useState(() => new Date().toISOString().slice(0, 10)); // YYYY-MM-DD
   const [dashDateEnd, setDashDateEnd] = useState(() => new Date().toISOString().slice(0, 10));
@@ -5141,6 +5142,91 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               );
             })}
           </div>
+
+          {/* Add Vehicle button + form */}
+          <div style={{ marginTop: 10, marginBottom: 8 }}>
+            <button onClick={() => setShowAddVehicleData(v => !v)} style={{
+              padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+              cursor: "pointer", fontFamily: "inherit",
+              background: showAddVehicleData ? "#f8fafc" : "#16a34a",
+              color: showAddVehicleData ? "#64748b" : "white",
+              border: `1px solid ${showAddVehicleData ? "#e2e8f0" : "#16a34a"}`,
+            }}>{showAddVehicleData ? "Cancel" : "\u2795 Add New Vehicle"}</button>
+          </div>
+          {showAddVehicleData && (
+            <div className="fade-in" style={{ background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 10, padding: "14px 16px", marginBottom: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#15803d", marginBottom: 10 }}>Add New Vehicle</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                <div>
+                  <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Registration *</label>
+                  <input value={addVehicle.rego} onChange={e => setAddVehicle(v => ({ ...v, rego: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6) }))} placeholder="e.g. XP86LM" maxLength={6}
+                    style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a", textTransform: "uppercase" }}
+                    onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Division *</label>
+                  <select value={addVehicle.div} onChange={e => setAddVehicle(v => ({ ...v, div: e.target.value }))} style={{
+                    width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, fontFamily: "inherit", color: "#0f172a", background: "white",
+                  }}>
+                    {DIVISION_KEYS.map(d => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Vehicle Type *</label>
+                  <select value={addVehicle.type} onChange={e => setAddVehicle(v => ({ ...v, type: e.target.value }))} style={{
+                    width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, fontFamily: "inherit", color: "#0f172a", background: "white",
+                  }}>
+                    {ALL_VEHICLE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
+                <div>
+                  <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Vehicle Name</label>
+                  <input value={addVehicle.name} onChange={e => setAddVehicle(v => ({ ...v, name: e.target.value }))} placeholder="e.g. Toyota Hilux"
+                    style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
+                    onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Owner/Driver</label>
+                  <input value={addVehicle.owner} onChange={e => setAddVehicle(v => ({ ...v, owner: e.target.value }))} placeholder="e.g. Kyle Osborne"
+                    style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }}
+                    onFocus={e => e.target.style.borderColor = "#22c55e"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Fuel Type</label>
+                  <select value={addVehicle.fuel} onChange={e => setAddVehicle(v => ({ ...v, fuel: e.target.value }))} style={{
+                    width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, fontFamily: "inherit", color: "#0f172a", background: "white",
+                  }}>
+                    {["Diesel","Unleaded","Premium Unleaded","Premium Diesel","E10"].map(t => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <button onClick={() => {
+                const rego = addVehicle.rego.trim().toUpperCase();
+                if (!rego || rego.length < 2) { showToast("Enter a registration number", "warn"); return; }
+                const existing = learnedDB[rego] || {};
+                const updated = {
+                  ...existing,
+                  t: addVehicle.type, d: addVehicle.div,
+                  n: addVehicle.name.trim() || existing.n || addVehicle.type,
+                  f: addVehicle.fuel || existing.f || "",
+                };
+                if (addVehicle.owner.trim()) updated.dr = addVehicle.owner.trim();
+                const newDB = { ...learnedDB, [rego]: updated };
+                persistLearned(newDB);
+                showToast(`${rego} saved to vehicle database`);
+                setAddVehicle({ rego: "", div: "Tree", type: "Ute", name: "", owner: "", fuel: "Diesel" });
+                setShowAddVehicleData(false);
+              }} style={{
+                padding: "8px 20px", borderRadius: 8, fontSize: 12, fontWeight: 700,
+                cursor: "pointer", fontFamily: "inherit",
+                background: "#16a34a", color: "white", border: "none", width: "100%",
+              }}>Save Vehicle</button>
+            </div>
+          )}
 
           {/* Filter summary */}
           {(searchTerm || dataFilter !== "All") && (
