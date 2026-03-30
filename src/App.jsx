@@ -3105,6 +3105,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
 
           // User override from review step takes priority
           if (sp._costOverride) cost = parseFloat(sp._costOverride) || cost;
+          if (sp._pplOverride) entryPpl = parseFloat(sp._pplOverride) || entryPpl;
 
           // Link AdBlue/other items to the primary vehicle from this receipt
           const linkedRego = form.registration?.trim().toUpperCase() || null;
@@ -3123,7 +3124,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             litres: entryLitres,
             pricePerLitre: entryPpl,
             totalCost: cost,
-            fuelType: matchedFuelLine?.fuelType || (matchedOther ? matchedOther.description : baseFuelType),
+            fuelType: sp._fuelTypeOverride || matchedFuelLine?.fuelType || (matchedOther ? matchedOther.description : baseFuelType),
             notes,
             splitReceipt: true,
             hasReceipt: !!receiptB64,
@@ -3151,6 +3152,9 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             sp.odometer, spLitresVal || matchedLine?.litres || 0, match, matchedLine
           );
           if (sp._costOverride) splitEntry.totalCost = parseFloat(sp._costOverride) || splitEntry.totalCost;
+          if (sp._pplOverride) splitEntry.pricePerLitre = parseFloat(sp._pplOverride) || splitEntry.pricePerLitre;
+          if (sp._fuelTypeOverride) splitEntry.fuelType = sp._fuelTypeOverride;
+          if (sp._vehicleOverride) splitEntry.vehicleType = sp._vehicleOverride;
           allNew = insertChronological(allNew, splitEntry);
           createdIds.push(splitEntry.id);
           learnFromSubmission(splitEntry);
@@ -4775,7 +4779,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               { label: "Equipment", val: sp.equipment, set: v => updateSplit(sp.id, "equipment", v) },
               { label: "Matched to", val: (mi?.description || ml?.fuelType || "") + (mi?.quantity ? ` (${mi.quantity})` : ""), set: null },
               { label: "Litres", val: displayLitres, set: v => updateSplit(sp.id, "litres", v) },
-              { label: "$/L", val: displayPpl, set: null },
+              { label: "$/L", val: sp._pplOverride || displayPpl, set: v => updateSplit(sp.id, "_pplOverride", v) },
               { label: "Cost", val: displayCost, set: v => updateSplit(sp.id, "_costOverride", v) },
               { label: "Notes", val: sp.notes || "", set: v => updateSplit(sp.id, "notes", v) },
             ];
@@ -4788,7 +4792,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             spRows = [
               { label: "Equipment", val: sp.equipment, set: v => updateSplit(sp.id, "equipment", v) },
               { label: "Litres", val: sp.litres, set: v => updateSplit(sp.id, "litres", v) },
-              { label: "$/L", val: otherPpl?.toString() || globalPpl?.toString() || "", set: null },
+              { label: "$/L", val: sp._pplOverride || otherPpl?.toString() || globalPpl?.toString() || "", set: v => updateSplit(sp.id, "_pplOverride", v) },
               { label: "Cost", val: sp._costOverride || (otherCost ? otherCost.toFixed(2) : ""), set: v => updateSplit(sp.id, "_costOverride", v) },
               { label: "Notes", val: sp.notes || "", set: v => updateSplit(sp.id, "notes", v) },
             ];
@@ -4809,11 +4813,11 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             const spCalcCost = spFinalLitres > 0 && spPpl > 0 ? (spFinalLitres * spPpl).toFixed(2) : "";
             spRows = [
               { label: "Registration", val: sp.rego, set: v => updateSplit(sp.id, "rego", v.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 6)) },
-              { label: "Vehicle", val: spMatch?.n || spMatch?.t || "\u2014", set: null },
-              { label: "Fuel type", val: ml?.fuelType || "", set: null },
+              { label: "Vehicle", val: sp._vehicleOverride || spMatch?.n || spMatch?.t || "\u2014", set: v => updateSplit(sp.id, "_vehicleOverride", v) },
+              { label: "Fuel type", val: sp._fuelTypeOverride || ml?.fuelType || "", set: v => updateSplit(sp.id, "_fuelTypeOverride", v) },
               { label: "Odometer", val: sp.odometer, set: v => updateSplit(sp.id, "odometer", v) },
               { label: "Litres", val: spDisplayLitres, set: v => updateSplit(sp.id, "litres", v) },
-              { label: "$/L", val: spPpl?.toString() || "", set: null },
+              { label: "$/L", val: sp._pplOverride || spPpl?.toString() || "", set: v => updateSplit(sp.id, "_pplOverride", v) },
               { label: "Cost", val: sp._costOverride || spCalcCost, set: v => updateSplit(sp.id, "_costOverride", v) },
             ];
           }
