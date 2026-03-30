@@ -3719,10 +3719,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
               );
             })()}
           </div>
-          {(() => {
+          {splitMode && (() => {
             const totalScanned = receiptData?.litres || 0;
             const otherVehicleLitres = splits.filter(s => s.splitType === "vehicle").reduce((s, sp) => s + (parseFloat(sp.litres) || 0), 0);
-            const remaining = splitMode && totalScanned > 0 ? Math.max(0, parseFloat((totalScanned - otherVehicleLitres).toFixed(2))) : 0;
+            const remaining = totalScanned > 0 ? Math.max(0, parseFloat((totalScanned - otherVehicleLitres).toFixed(2))) : 0;
             const hint = remaining > 0 && !form.litres
               ? `${remaining}L remaining from ${totalScanned}L total`
               : "How many litres went into this vehicle";
@@ -3732,10 +3732,12 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
             );
           })()}
         </div>
-        <div style={{ marginBottom: 14 }}>
-          <FieldInput label="Price per litre ($/L)" value={form.ppl || ""} type="number"
-            onChange={v => setForm(f => ({ ...f, ppl: v }))} placeholder="e.g. 2.859" hint="Optional — will be filled from receipt scan if left blank" />
-        </div>
+        {splitMode && (
+          <div style={{ marginBottom: 14 }}>
+            <FieldInput label="Price per litre ($/L)" value={form.ppl || ""} type="number"
+              onChange={v => setForm(f => ({ ...f, ppl: v }))} placeholder="e.g. 2.859" hint="Optional — will be filled from receipt scan if left blank" />
+          </div>
+        )}
 
         {/* ── Additional items (vehicles or other) ── */}
         {splitMode && splits.map((sp, si) => {
