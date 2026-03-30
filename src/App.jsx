@@ -2384,7 +2384,7 @@ export default function App() {
   const [adminPasscode, setAdminPasscode] = useState("admin"); // default passcode
   const [passcodeInput, setPasscodeInput] = useState("");
 
-  const [form, setForm] = useState({ driverFirstName: "", driverLastName: "", registration: "", division: "", vehicleType: "", odometer: "" });
+  const [form, setForm] = useState({ driverFirstName: "", driverLastName: "", registration: "", division: "", vehicleType: "", odometer: "", ppl: "" });
   const [savedDriver, setSavedDriver] = useState(null); // { name, rego }
   const [otherMode, setOtherMode] = useState(false);
   const [otherForm, setOtherForm] = useState({ equipment: "", station: "", fleetCard: "", cardRego: "", notes: "", division: "Tree" });
@@ -2722,7 +2722,7 @@ export default function App() {
   const resetForm = () => {
     setStep(1);
     // Re-apply saved driver profile if exists
-    const base = { driverFirstName: "", driverLastName: "", registration: "", division: "", vehicleType: "", odometer: "" };
+    const base = { driverFirstName: "", driverLastName: "", registration: "", division: "", vehicleType: "", odometer: "", ppl: "" };
     if (savedDriver) {
       if (savedDriver.firstName) base.driverFirstName = savedDriver.firstName;
       if (savedDriver.lastName) base.driverLastName = savedDriver.lastName;
@@ -3685,7 +3685,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
           </>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: splitMode ? "1fr 1fr" : "1fr", gap: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <div style={{ marginBottom: 14 }}>
             <label style={{ display: "block", fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 5 }}>
               Odometer / Hours Reading<span style={{ color: "#ef4444", marginLeft: 2 }}>*</span>
@@ -3719,10 +3719,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
               );
             })()}
           </div>
-          {splitMode && (() => {
+          {(() => {
             const totalScanned = receiptData?.litres || 0;
             const otherVehicleLitres = splits.filter(s => s.splitType === "vehicle").reduce((s, sp) => s + (parseFloat(sp.litres) || 0), 0);
-            const remaining = totalScanned > 0 ? Math.max(0, parseFloat((totalScanned - otherVehicleLitres).toFixed(2))) : 0;
+            const remaining = splitMode && totalScanned > 0 ? Math.max(0, parseFloat((totalScanned - otherVehicleLitres).toFixed(2))) : 0;
             const hint = remaining > 0 && !form.litres
               ? `${remaining}L remaining from ${totalScanned}L total`
               : "How many litres went into this vehicle";
@@ -3731,6 +3731,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke|stump|leaf.?blow|chainsaw|fuel.?cell|
                 onChange={v => setForm(f => ({ ...f, litres: v }))} placeholder={remaining > 0 ? `${remaining}` : "e.g. 44.35"} hint={hint} />
             );
           })()}
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <FieldInput label="Price per litre ($/L)" value={form.ppl || ""} type="number"
+            onChange={v => setForm(f => ({ ...f, ppl: v }))} placeholder="e.g. 2.859" hint="Optional — will be filled from receipt scan if left blank" />
         </div>
 
         {/* ── Additional items (vehicles or other) ── */}
@@ -4537,11 +4541,16 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       : (receiptData?._rawLitres || receiptData?.litres?.toString() || "");
 
     // Price per litre logic:
+    // - If user entered $/L on Step 1, trust that first
     // - In split mode: trust the scanned line's price (user is splitting litres, not changing price)
     // - In non-split mode: recalculate from cost ÷ litres as a cross-check
     const userLitres = parseFloat(primaryLitres);
+    const userPpl = parseFloat(form.ppl);
     let primaryPpl;
-    if (splitMode) {
+    if (userPpl > 0) {
+      // User explicitly entered $/L on Step 1 — trust it
+      primaryPpl = userPpl;
+    } else if (splitMode) {
       // Split mode: price per litre stays the same regardless of how litres are divided
       primaryPpl = primaryLine?.pricePerLitre || receiptData?.pricePerLitre || globalPpl;
     } else {
