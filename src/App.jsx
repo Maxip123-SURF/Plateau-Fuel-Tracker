@@ -2837,9 +2837,19 @@ export default function App() {
     setError("");
   };
 
-  const ORIENTATION_PROMPT = `Look at this image. Is the text in the image upright and readable, or is the image rotated/sideways/upside down?
-Return ONLY valid JSON: {"rotation": 0} if text is upright, {"rotation": 90} if rotated 90° clockwise, {"rotation": 180} if upside down, {"rotation": 270} if rotated 90° counter-clockwise.
-Only return one of: 0, 90, 180, or 270.`;
+  const ORIENTATION_PROMPT = `You are looking at a fuel receipt or docket from a petrol station. Your job is to determine if the image needs rotation so the text reads normally (left to right, top to bottom).
+
+Look at the MAIN BODY TEXT of the receipt — the station name, date, fuel type, litres, and dollar amounts. Ignore barcodes, logos, or small rotated text.
+
+How to decide:
+- If the main text reads normally (left to right, top to bottom): rotation = 0
+- If the receipt is sideways and you'd need to turn your head RIGHT to read it: rotation = 270 (the image was rotated 90° clockwise, so we rotate 270° to fix)
+- If the receipt is sideways and you'd need to turn your head LEFT to read it: rotation = 90 (the image was rotated 270° clockwise, so we rotate 90° to fix)
+- If the text is completely upside down: rotation = 180
+
+IMPORTANT: Most phone photos of receipts are already upright (rotation = 0). Only suggest rotation if the text is clearly NOT readable in its current orientation. When in doubt, return 0.
+
+Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180} or {"rotation": 270}`;
 
   // Date anomaly check — flag if scanned date is outside 14-day window
   const DATE_WINDOW_DAYS = 14;
@@ -2893,9 +2903,40 @@ Only return one of: 0, 90, 180, or 270.`;
       // Step 3: Full receipt scan on properly oriented image
       setReceiptB64(b64);
       setReceiptMime(mime);
-      const result = await claudeScan(apiKey, b64, mime, RECEIPT_SCAN_PROMPT);
+      let result = await claudeScan(apiKey, b64, mime, RECEIPT_SCAN_PROMPT);
       if (scanIdRef.current !== currentScanId) return;
-      const normalized = normalizeReceiptData(result);
+      let normalized = normalizeReceiptData(result);
+
+      // Step 4: Orientation validation — if scan produced very little data and we rotated,
+      // the orientation was probably wrong. Try again at 0°.
+      if (rotation !== 0) {
+        const hasDate = !!normalized.date;
+        const hasStation = !!normalized.station;
+        const hasLitres = normalized.litres > 0;
+        const hasCost = normalized.totalCost > 0 || normalized.fuelCost > 0;
+        const dataQuality = [hasDate, hasStation, hasLitres, hasCost].filter(Boolean).length;
+        if (dataQuality <= 1) {
+          console.log(`[Orientation] Rotated scan produced low data (quality=${dataQuality}/4). Retrying at 0°...`);
+          try {
+            const original = await compressImage(file, 0);
+            if (scanIdRef.current !== currentScanId) return;
+            const retryResult = await claudeScan(apiKey, original.b64, original.mime, RECEIPT_SCAN_PROMPT);
+            if (scanIdRef.current !== currentScanId) return;
+            const retryNormalized = normalizeReceiptData(retryResult);
+            const retryQuality = [!!retryNormalized.date, !!retryNormalized.station, retryNormalized.litres > 0, (retryNormalized.totalCost > 0 || retryNormalized.fuelCost > 0)].filter(Boolean).length;
+            if (retryQuality > dataQuality) {
+              console.log(`[Orientation] Original orientation (0°) produced better data (quality=${retryQuality}/4). Using original.`);
+              b64 = original.b64; mime = original.mime;
+              result = retryResult; normalized = retryNormalized;
+              rotation = 0;
+              setReceiptB64(b64); setReceiptMime(mime);
+              setReceiptPreview(`data:${mime};base64,${b64}`);
+              setReceiptRotation(0);
+            }
+          } catch (_) { /* retry failed — keep rotated version */ }
+        }
+      }
+
       setReceiptData(normalized);
       checkScannedDate(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
