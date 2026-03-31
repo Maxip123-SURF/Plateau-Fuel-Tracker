@@ -2782,6 +2782,22 @@ export default function App() {
 Return ONLY valid JSON: {"rotation": 0} if text is upright, {"rotation": 90} if rotated 90° clockwise, {"rotation": 180} if upside down, {"rotation": 270} if rotated 90° counter-clockwise.
 Only return one of: 0, 90, 180, or 270.`;
 
+  // Date anomaly check — flag if scanned date is outside 14-day window
+  const DATE_WINDOW_DAYS = 14;
+  const checkScannedDate = (normalized) => {
+    if (!normalized?.date) return;
+    const scannedTs = parseDate(normalized.date);
+    if (!scannedTs) return;
+    const scannedDate = new Date(scannedTs);
+    const now = new Date();
+    const diffMs = Math.abs(now - scannedDate);
+    const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+    if (diffDays > DATE_WINDOW_DAYS) {
+      const direction = scannedDate > now ? "in the future" : `${diffDays} days ago`;
+      showToast(`Date "${normalized.date}" looks unusual (${direction}). Please double-check.`, "warn");
+    }
+  };
+
   const handleReceiptFile = async (file) => {
     if (!file || !file.type.startsWith("image/")) return;
     if (receiptPreview?.startsWith("blob:")) URL.revokeObjectURL(receiptPreview);
@@ -2822,6 +2838,7 @@ Only return one of: 0, 90, 180, or 270.`;
       if (scanIdRef.current !== currentScanId) return;
       const normalized = normalizeReceiptData(result);
       setReceiptData(normalized);
+      checkScannedDate(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current);
         setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
@@ -2847,6 +2864,7 @@ Only return one of: 0, 90, 180, or 270.`;
       const result = await claudeScan(apiKey, b64, mime, RECEIPT_SCAN_PROMPT);
       const normalized = normalizeReceiptData(result);
       setReceiptData(normalized);
+      checkScannedDate(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current);
         setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
@@ -2863,6 +2881,7 @@ Only return one of: 0, 90, 180, or 270.`;
       const result = await claudeScan(apiKey, receiptB64, receiptMime, RECEIPT_SCAN_PROMPT);
       const normalized = normalizeReceiptData(result);
       setReceiptData(normalized);
+      checkScannedDate(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current);
         setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
@@ -4541,15 +4560,24 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                 const card = cardData?.cardNumber || otherForm.fleetCard;
                 if (card && card.length >= 10 && cleanRego) learnFleetCardCorrection(card, cleanRego);
               }},
-              { label: "Date", val: receiptData?.date || "", set: v => setReceiptData(d => ({...d, date: v})) },
+              { label: "Date", val: receiptData?.date || "", set: v => setReceiptData(d => ({...d, date: v})), warn: (() => {
+                if (!receiptData?.date) return null;
+                const ts = parseDate(receiptData.date); if (!ts) return null;
+                const diffDays = Math.round(Math.abs(new Date() - new Date(ts)) / 86400000);
+                if (diffDays > DATE_WINDOW_DAYS) return `Date is ${new Date(ts) > new Date() ? "in the future" : diffDays + " days ago"} — please double-check`;
+                return null;
+              })() },
               { label: "Litres", val: receiptData?._rawLitres || receiptData?.litres?.toString() || "", set: v => setReceiptData(d => ({...d, litres: v, _rawLitres: v})) },
               { label: "$/L", val: receiptData?._rawPpl || receiptData?.pricePerLitre?.toString() || "", set: v => setReceiptData(d => ({...d, pricePerLitre: v, _rawPpl: v})) },
               { label: "Total Cost", val: receiptData?._rawCost || receiptData?.totalCost?.toString() || "", set: v => setReceiptData(d => ({...d, totalCost: v, _rawCost: v})) },
               { label: "Notes", val: otherForm.notes || "", set: v => setOtherForm(f => ({...f, notes: v})) },
-            ].map(({ label, val, set }, i, arr) => (
-              <div key={label} style={rowStyle(i, arr.length)}>
-                <span style={labelStyle}>{label}</span>
-                <input value={val} onChange={e => set(e.target.value)} style={inputStyle} onFocus={focusStyle} onBlur={blurStyle} />
+            ].map(({ label, val, set, warn }, i, arr) => (
+              <div key={label}>
+                <div style={rowStyle(i, arr.length)}>
+                  <span style={labelStyle}>{label}</span>
+                  <input value={val} onChange={e => set(e.target.value)} style={{...inputStyle, ...(warn ? { color: "#dc2626", fontWeight: 700 } : {})}} onFocus={focusStyle} onBlur={blurStyle} />
+                </div>
+                {warn && <div style={{ padding: "4px 14px 6px", fontSize: 11, color: "#dc2626", fontWeight: 600, background: "#fef2f2", borderBottom: "1px solid #fca5a5" }}>{"\u26A0"} {warn}</div>}
               </div>
             ))}
           </div>
@@ -4642,7 +4670,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       { label: "Division", val: form.division, set: v => setForm(f => ({...f, division: v})) },
       { label: "Vehicle type", val: form.vehicleType, set: v => setForm(f => ({...f, vehicleType: v})) },
       { label: "Odometer", val: form.odometer, set: v => setForm(f => ({...f, odometer: v})) },
-      { label: "Date", val: receiptData?.date || "", set: v => setReceiptData(d => ({...d, date: v})) },
+      { label: "Date", val: receiptData?.date || "", set: v => setReceiptData(d => ({...d, date: v})), warn: (() => {
+        if (!receiptData?.date) return null;
+        const ts = parseDate(receiptData.date); if (!ts) return null;
+        const diffDays = Math.round(Math.abs(new Date() - new Date(ts)) / 86400000);
+        if (diffDays > DATE_WINDOW_DAYS) return `Date is ${new Date(ts) > new Date() ? "in the future" : diffDays + " days ago"} — please double-check`;
+        return null;
+      })() },
       { label: "Station", val: receiptData?.station || "", set: v => setReceiptData(d => ({...d, station: v})) },
       { label: "Fuel type", val: primaryFuelType, set: v => setReceiptData(d => ({...d, fuelType: v})) },
       { label: "Litres", val: primaryLitres, set: v => { if (splitMode) setForm(f => ({...f, litres: v})); else setReceiptData(d => ({...d, litres: v, _rawLitres: v})); } },
@@ -4744,14 +4778,17 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           <div style={{ background: "#f0fdf4", padding: "8px 14px", fontSize: 11, fontWeight: 700, color: "#15803d", letterSpacing: "0.04em", textTransform: "uppercase", borderBottom: "1px solid #86efac" }}>
             {"\u26FD"} Fuel Receipt Details
           </div>
-          {vehicleRows.map(({ label, val, set }, i) => (
-            <div key={label} style={rowStyle(i, vehicleRows.length)}>
-              <span style={labelStyle}>{label}</span>
-              {set ? (
-                <input value={val} onChange={e => set(e.target.value)} style={inputStyle} onFocus={focusStyle} onBlur={blurStyle} />
-              ) : (
-                <span style={{ fontWeight: 500, color: "#0f172a", textAlign: "right", fontSize: 13 }}>{val || "\u2014"}</span>
-              )}
+          {vehicleRows.map(({ label, val, set, warn }, i) => (
+            <div key={label}>
+              <div style={rowStyle(i, vehicleRows.length)}>
+                <span style={labelStyle}>{label}</span>
+                {set ? (
+                  <input value={val} onChange={e => set(e.target.value)} style={{...inputStyle, ...(warn ? { color: "#dc2626", fontWeight: 700 } : {})}} onFocus={focusStyle} onBlur={blurStyle} />
+                ) : (
+                  <span style={{ fontWeight: 500, color: "#0f172a", textAlign: "right", fontSize: 13 }}>{val || "\u2014"}</span>
+                )}
+              </div>
+              {warn && <div style={{ padding: "4px 14px 6px", fontSize: 11, color: "#dc2626", fontWeight: 600, background: "#fef2f2", borderBottom: "1px solid #fca5a5" }}>{"\u26A0"} {warn}</div>}
             </div>
           ))}
         </div>
