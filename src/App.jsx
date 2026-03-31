@@ -2456,6 +2456,7 @@ export default function App() {
   const [reconFilter, setReconFilter] = useState("all"); // "all" | "matched" | "mismatched" | "missing"
   const [reconSearch, setReconSearch] = useState("");
   const [reconUploading, setReconUploading] = useState(false);
+  const csvInputRef = useRef(null);
 
   // ── Receipt image storage (Supabase Storage) ──
   const saveReceiptImage = async (entryId, b64, mime) => {
@@ -7189,8 +7190,6 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
 
   // ── Reconciliation View ───────────────────────────────────────────────────
   const renderReconciliation = () => {
-    const csvInputRef = React.createRef();
-
     const handleCSVUpload = async (file) => {
       if (!file) return;
       setReconUploading(true);
