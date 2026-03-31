@@ -6103,8 +6103,8 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               case "litres-asc": return a.litres - b.litres;
               case "fills-desc": return b.fills - a.fills;
               case "km-desc": return b.km - a.km;
-              case "alpha-asc": return a.rego.localeCompare(b.rego);
-              case "alpha-desc": return b.rego.localeCompare(a.rego);
+              case "alpha-asc": return (a.rego || "").localeCompare(b.rego || "");
+              case "alpha-desc": return (b.rego || "").localeCompare(a.rego || "");
               default: return b.cost - a.cost;
             }
           });
