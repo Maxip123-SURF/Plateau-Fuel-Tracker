@@ -8370,6 +8370,15 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
   const navItems = isAdmin
     ? [["submit", "+ Entry"], ["dashboard", "Dashboard"], ["data", "Data"], ["drivers", "Drivers"], ["cards", "Cards"], ["reconcile", "Reconcile"], ["settings", "\u2699"]]
     : [["submit", "+ Entry"]];
+  const navColors = {
+    submit: "#16a34a",     // green
+    dashboard: "#2563eb",  // blue
+    data: "#7c3aed",       // purple
+    drivers: "#0891b2",    // teal
+    cards: "#c2410c",      // orange
+    reconcile: "#0d9488",  // emerald
+    settings: "#64748b",   // slate
+  };
 
   const handleLogin = () => {
     if (loginInput === adminPasscode) {
@@ -8406,16 +8415,19 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           </div>
         </div>
         <div style={{ display: "flex", gap: 4, alignItems: "center", overflowX: "auto", flexShrink: 1 }}>
-          {navItems.map(([v, label]) => (
-            <button key={v} onClick={() => { setView(v); if (v === "submit") resetForm(); }} style={{
-              padding: "8px 12px", borderRadius: 7, fontSize: 12, cursor: "pointer",
-              fontFamily: "inherit", fontWeight: view === v ? 700 : 500,
-              background: view === v ? "#16a34a" : "transparent",
-              color: view === v ? "white" : "#64748b",
-              border: `1px solid ${view === v ? "#16a34a" : "#e2e8f0"}`,
-              transition: "all 0.15s", whiteSpace: "nowrap", minHeight: 38, flexShrink: 0,
-            }}>{label}</button>
-          ))}
+          {navItems.map(([v, label]) => {
+            const nc = navColors[v] || "#16a34a";
+            return (
+              <button key={v} onClick={() => { setView(v); if (v === "submit") resetForm(); }} style={{
+                padding: "8px 12px", borderRadius: 7, fontSize: 12, cursor: "pointer",
+                fontFamily: "inherit", fontWeight: view === v ? 700 : 500,
+                background: view === v ? nc : "transparent",
+                color: view === v ? "white" : "#64748b",
+                border: `1px solid ${view === v ? nc : "#e2e8f0"}`,
+                transition: "all 0.15s", whiteSpace: "nowrap", minHeight: 38, flexShrink: 0,
+              }}>{label}</button>
+            );
+          })}
           {/* Role button */}
           {isAdmin ? (
             <button onClick={handleLogout} title="Sign out of admin" style={{
