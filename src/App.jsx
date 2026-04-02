@@ -6197,7 +6197,11 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       if (dashPeriod === "daily") d.setDate(d.getDate() + dir);
       else if (dashPeriod === "weekly") d.setDate(d.getDate() + (dir * 7));
       else if (dashPeriod === "monthly") d.setMonth(d.getMonth() + dir);
-      setDashDate(d.toISOString().slice(0, 10));
+      // Use local date components (not toISOString which converts to UTC and can skip days in AEST)
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      setDashDate(`${yyyy}-${mm}-${dd}`);
     };
 
     // Per-vehicle breakdown for this period
