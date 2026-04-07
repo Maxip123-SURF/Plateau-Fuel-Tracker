@@ -2685,6 +2685,7 @@ export default function App() {
   const [resolvedFlags, setResolvedFlags] = useState({}); // { "flagId": { by, note, at } }
   const [flagsFilter, setFlagsFilter] = useState("open"); // "open" | "resolved" | "all"
   const [replyingFlag, setReplyingFlag] = useState(null); // flagId currently being responded to
+  const [flagsRegoSearch, setFlagsRegoSearch] = useState(""); // rego search in flags modal
   const [expandedReceipt, setExpandedReceipt] = useState(null); // flagId or entryId whose receipt is shown inline
   const [editingEntry, setEditingEntry] = useState(null); // entry object being edited
   const [vehicleMenu, setVehicleMenu] = useState(null); // rego string for open menu
@@ -7170,7 +7171,12 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     const flagsWithId = opsFlags.map(f => ({ ...f, _id: flagId(f) }));
     const openFlags = flagsWithId.filter(f => !resolvedFlags[f._id]);
     const doneFlags = flagsWithId.filter(f => resolvedFlags[f._id]);
-    const visibleFlags = flagsFilter === "open" ? openFlags : flagsFilter === "resolved" ? doneFlags : flagsWithId;
+    const baseVisible = flagsFilter === "open" ? openFlags : flagsFilter === "resolved" ? doneFlags : flagsWithId;
+    const regoQ = flagsRegoSearch.trim().toUpperCase();
+    const visibleFlags = regoQ ? baseVisible.filter(f => (f.rego || "").toUpperCase().includes(regoQ)) : baseVisible;
+
+    // Unique regos for quick-pick pills
+    const allRegos = [...new Set(baseVisible.map(f => f.rego).filter(Boolean))].sort();
 
     // Group by type of issue
     const groupFlags = (list) => {
@@ -7281,7 +7287,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex",
         alignItems: "flex-start", justifyContent: "center", zIndex: 100, padding: "40px 16px",
         overflowY: "auto",
-      }} onClick={() => { setShowFlags(false); setReplyingFlag(null); }}>
+      }} onClick={() => { setShowFlags(false); setReplyingFlag(null); setFlagsRegoSearch(""); }}>
         <div onClick={e => e.stopPropagation()} style={{
           background: "white", borderRadius: 14, padding: 24, width: "100%", maxWidth: 640,
           boxShadow: "0 20px 60px rgba(0,0,0,0.2)", maxHeight: "85vh", overflowY: "auto",
@@ -7292,9 +7298,10 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>{"\u26A0"} Issues to Address</div>
               <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
                 {openFlags.length} open {"\u00B7"} {doneFlags.length} resolved
+                {regoQ && <span style={{ color: "#2563eb", fontWeight: 600 }}> {"\u00B7"} filtered: {flagsRegoSearch}</span>}
               </div>
             </div>
-            <button onClick={() => { setShowFlags(false); setReplyingFlag(null); }} style={{
+            <button onClick={() => { setShowFlags(false); setReplyingFlag(null); setFlagsRegoSearch(""); }} style={{
               background: "none", border: "none", fontSize: 24, color: "#94a3b8", cursor: "pointer", lineHeight: 1,
             }}>{"\u00D7"}</button>
           </div>
@@ -7335,13 +7342,51 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             ))}
           </div>
 
+          {/* Rego search */}
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ position: "relative", marginBottom: allRegos.length > 1 ? 8 : 0 }}>
+              <input value={flagsRegoSearch} onChange={e => setFlagsRegoSearch(e.target.value)}
+                placeholder="Filter by vehicle rego..."
+                style={{
+                  width: "100%", padding: "8px 12px 8px 32px", borderRadius: 8,
+                  border: `1px solid ${flagsRegoSearch ? "#2563eb" : "#e2e8f0"}`,
+                  fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a",
+                  background: flagsRegoSearch ? "#eff6ff" : "white",
+                }}
+                onFocus={e => e.target.style.borderColor = "#2563eb"}
+                onBlur={e => { if (!flagsRegoSearch) e.target.style.borderColor = "#e2e8f0"; }}
+              />
+              <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 14, color: "#94a3b8" }}>{"\uD83D\uDD0D"}</span>
+              {flagsRegoSearch && (
+                <button onClick={() => setFlagsRegoSearch("")} style={{
+                  position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                  background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 16,
+                }}>{"\u00D7"}</button>
+              )}
+            </div>
+            {allRegos.length > 1 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                {allRegos.map(r => (
+                  <button key={r} onClick={() => setFlagsRegoSearch(flagsRegoSearch === r ? "" : r)} style={{
+                    padding: "3px 8px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                    cursor: "pointer", fontFamily: "inherit",
+                    background: flagsRegoSearch.toUpperCase() === r ? "#2563eb" : "#f8fafc",
+                    color: flagsRegoSearch.toUpperCase() === r ? "white" : "#64748b",
+                    border: `1px solid ${flagsRegoSearch.toUpperCase() === r ? "#2563eb" : "#e2e8f0"}`,
+                  }}>{r}</button>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Flag list */}
           {visibleFlags.length === 0 ? (
             <div style={{ textAlign: "center", padding: "32px 0", color: flagsFilter === "open" ? "#15803d" : "#94a3b8" }}>
-              <div style={{ fontSize: 36, marginBottom: 8 }}>{flagsFilter === "open" ? "\u2713" : "\uD83D\uDCCB"}</div>
+              <div style={{ fontSize: 36, marginBottom: 8 }}>{flagsFilter === "open" ? "\u2713" : regoQ ? "\uD83D\uDD0D" : "\uD83D\uDCCB"}</div>
               <div style={{ fontWeight: 600 }}>
-                {flagsFilter === "open" ? "All clear! No open issues." : flagsFilter === "resolved" ? "No resolved issues yet." : "No issues found."}
+                {regoQ ? `No issues found for "${flagsRegoSearch}"` : flagsFilter === "open" ? "All clear! No open issues." : flagsFilter === "resolved" ? "No resolved issues yet." : "No issues found."}
               </div>
+              {regoQ && <button onClick={() => setFlagsRegoSearch("")} style={{ marginTop: 8, padding: "4px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: "#f8fafc", color: "#64748b", border: "1px solid #e2e8f0", cursor: "pointer", fontFamily: "inherit" }}>Clear search</button>}
             </div>
           ) : (
             groups.map(g => (
