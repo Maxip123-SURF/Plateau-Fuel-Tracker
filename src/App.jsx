@@ -5544,6 +5544,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                       <div style={{ color: "#64748b", fontSize: 10, marginTop: 2 }}>{f.detail}</div>
                     </div>
                     <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      {f._entry?.hasReceipt && (
+                        <button onClick={() => setViewingReceipt(f._entry.id)} style={{
+                          padding: "4px 10px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                          background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe",
+                          cursor: "pointer", fontFamily: "inherit",
+                        }}>{"\uD83D\uDCC4"} Receipt</button>
+                      )}
                       <button onClick={() => setEditingEntry(f._entry)} style={{
                         padding: "4px 10px", borderRadius: 5, fontSize: 10, fontWeight: 600,
                         background: "#f8fafc", color: "#64748b", border: "1px solid #e2e8f0",
@@ -7065,6 +7072,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
 
             {/* Action buttons */}
             <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+              {f._entry?.hasReceipt && (
+                <button onClick={() => { setViewingReceipt(f._entry.id); setShowFlags(false); }} style={{
+                  padding: "4px 8px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                  background: "#faf5ff", color: "#7c3aed", border: "1px solid #c4b5fd",
+                  cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                }}>{"\uD83D\uDCC4"} Receipt</button>
+              )}
               {!isResolved && !isReplying && (
                 <button onClick={() => setReplyingFlag(f._id)} style={{
                   padding: "4px 8px", borderRadius: 5, fontSize: 10, fontWeight: 600,
@@ -7274,6 +7288,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                       )}
                     </div>
                     <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      {f._entry?.hasReceipt && (
+                        <button onClick={() => { setViewingReceipt(f._entry.id); setShowAiFlags(false); }} style={{
+                          padding: "4px 10px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                          background: "#faf5ff", color: "#7c3aed", border: "1px solid #c4b5fd",
+                          cursor: "pointer", fontFamily: "inherit",
+                        }}>{"\uD83D\uDCC4"} Receipt</button>
+                      )}
                       {!isResolved && f._entry && (
                         <button onClick={() => { setEditingEntry(f._entry); setShowAiFlags(false); }} style={{
                           padding: "4px 10px", borderRadius: 5, fontSize: 10, fontWeight: 600,
