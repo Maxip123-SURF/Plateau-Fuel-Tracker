@@ -3896,13 +3896,13 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
 
         {/* Vehicle / Other toggle */}
         <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
-          <button onClick={() => setOtherMode(false)} style={{
+          <button onClick={() => { setOtherMode(false); setSplitMode(false); setSplits([]); setError(""); }} style={{
             flex: 1, padding: "10px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer",
             fontFamily: "inherit", fontWeight: !otherMode ? 700 : 500,
             background: !otherMode ? "#f0fdf4" : "white", color: !otherMode ? "#15803d" : "#64748b",
             border: `2px solid ${!otherMode ? "#86efac" : "#e2e8f0"}`, transition: "all 0.15s",
           }}>{"\uD83D\uDE97"} Vehicle</button>
-          <button onClick={() => setOtherMode(true)} style={{
+          <button onClick={() => { setOtherMode(true); setSplitMode(false); setSplits([]); setError(""); }} style={{
             flex: 1, padding: "10px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer",
             fontFamily: "inherit", fontWeight: otherMode ? 700 : 500,
             background: otherMode ? "#fefce8" : "white", color: otherMode ? "#854d0e" : "#64748b",
@@ -4476,48 +4476,71 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
 
               {isOther ? (
                 <>
-                  <div style={{ marginBottom: 8 }}>
-                    <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Equipment / Purpose</label>
-                    <input value={sp.equipment} onChange={e => updateSplit(sp.id, "equipment", e.target.value)} placeholder="e.g. Jerry Can, Chainsaws"
-                      style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
-                      onFocus={e => e.target.style.borderColor = "#fde047"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
-                  </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
-                    {EQUIPMENT_PRESETS.map(p => (
-                      <button key={p} onClick={() => updateSplit(sp.id, "equipment", sp.equipment ? `${sp.equipment}, ${p}` : p)} style={{
-                        padding: "3px 8px", borderRadius: 12, fontSize: 9, cursor: "pointer", fontFamily: "inherit",
-                        fontWeight: 500, background: "#fefce8", color: "#854d0e", border: "1px solid #fde047",
-                      }}>{p}</button>
-                    ))}
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                    <div>
-                      <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Litres</label>
-                      <input value={sp.litres} onChange={e => updateSplit(sp.id, "litres", e.target.value)} placeholder="e.g. 15.14" type="number" inputMode="decimal"
-                        style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
-                        onFocus={e => e.target.style.borderColor = "#fde047"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+                  <div>
+                    <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 4 }}>What is this for?</label>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+                      {ALL_EQUIPMENT_PRESETS.map(p => {
+                        const selected = sp.equipment === p.label;
+                        const isOilP = OIL_PRODUCTS.some(o => o.label === p.label);
+                        return (
+                          <button key={p.label} onClick={() => updateSplit(sp.id, "equipment", selected ? "" : p.label)} style={{
+                            padding: "5px 10px", borderRadius: 8, fontSize: 10, cursor: "pointer", fontFamily: "inherit",
+                            fontWeight: selected ? 700 : 500, transition: "all 0.15s",
+                            background: selected ? (isOilP ? "#e0e7ff" : "#fef3c7") : "white",
+                            color: selected ? (isOilP ? "#3730a3" : "#92400e") : "#64748b",
+                            border: `1.5px solid ${selected ? (isOilP ? "#6366f1" : "#f59e0b") : "#e2e8f0"}`,
+                          }}>{p.icon} {p.label}</button>
+                        );
+                      })}
                     </div>
-                    <div>
-                      <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>$/L <span style={{ fontWeight: 400, color: "#94a3b8" }}>(opt)</span></label>
-                      <input value={sp.ppl || ""} onChange={e => updateSplit(sp.id, "ppl", e.target.value)} placeholder="e.g. 1.919" type="number" inputMode="decimal"
-                        style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
-                        onFocus={e => e.target.style.borderColor = "#fde047"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
-                    </div>
-                    <div>
-                      <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Total Cost <span style={{ fontWeight: 400, color: "#94a3b8" }}>(opt)</span></label>
-                      <input value={sp.totalCost || ""} onChange={e => updateSplit(sp.id, "totalCost", e.target.value)}
-                        placeholder={(() => { const l = parseFloat(sp.litres) || 0; const p = parseFloat(sp.ppl) || 0; return l > 0 && p > 0 ? `$${(l * p).toFixed(2)}` : "e.g. 26.05"; })()}
-                        type="number" inputMode="decimal"
-                        style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
-                        onFocus={e => e.target.style.borderColor = "#fde047"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
-                    </div>
+                    {!sp.equipment && (
+                      <input value={sp._customEquip || ""} onChange={e => updateSplit(sp.id, "_customEquip", e.target.value)}
+                        onBlur={e => { if (e.target.value.trim()) { updateSplit(sp.id, "equipment", e.target.value.trim()); updateSplit(sp.id, "_customEquip", ""); }}}
+                        placeholder="Or type a custom item..."
+                        style={{ width: "100%", padding: "6px 10px", borderRadius: 7, border: "1px dashed #e2e8f0", fontSize: 11, outline: "none", fontFamily: "inherit", color: "#64748b", background: "white", boxSizing: "border-box" }} />
+                    )}
+                    {sp.equipment && <div style={{ fontSize: 11, color: "#15803d", fontWeight: 600, marginTop: 2 }}>{"\u2713"} {sp.equipment}</div>}
                   </div>
-                  <div style={{ marginTop: 8 }}>
-                    <label style={{ display: "block", fontSize: 11, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Notes <span style={{ fontWeight: 400, color: "#94a3b8" }}>(opt)</span></label>
-                    <input value={sp.notes} onChange={e => updateSplit(sp.id, "notes", e.target.value)} placeholder="e.g. for truck"
-                      style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
-                      onFocus={e => e.target.style.borderColor = "#fde047"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
-                  </div>
+                  {/* Fuel-type fields */}
+                  {sp.equipment && !isOilProduct(sp.equipment) && (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 8 }}>
+                      <div>
+                        <label style={{ display: "block", fontSize: 10, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Litres</label>
+                        <input value={sp.litres} onChange={e => updateSplit(sp.id, "litres", e.target.value)} placeholder="e.g. 15.14" type="number" inputMode="decimal"
+                          style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
+                          onFocus={e => e.target.style.borderColor = "#fde047"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: 10, color: "#374151", fontWeight: 600, marginBottom: 3 }}>$/L <span style={{ fontWeight: 400, color: "#94a3b8" }}>(opt)</span></label>
+                        <input value={sp.ppl || ""} onChange={e => updateSplit(sp.id, "ppl", e.target.value)} placeholder="e.g. 1.899" type="number" inputMode="decimal"
+                          style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
+                          onFocus={e => e.target.style.borderColor = "#fde047"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: 10, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Notes</label>
+                        <input value={sp.notes || ""} onChange={e => updateSplit(sp.id, "notes", e.target.value)} placeholder="Optional"
+                          style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
+                          onFocus={e => e.target.style.borderColor = "#fde047"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+                      </div>
+                    </div>
+                  )}
+                  {/* Oil/product fields */}
+                  {sp.equipment && isOilProduct(sp.equipment) && (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+                      <div>
+                        <label style={{ display: "block", fontSize: 10, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Quantity</label>
+                        <input value={sp.quantity || ""} onChange={e => updateSplit(sp.id, "quantity", e.target.value)} placeholder="e.g. 2" type="number" inputMode="numeric"
+                          style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
+                          onFocus={e => e.target.style.borderColor = "#6366f1"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: 10, color: "#374151", fontWeight: 600, marginBottom: 3 }}>Price ($)</label>
+                        <input value={sp.ppl || ""} onChange={e => updateSplit(sp.id, "ppl", e.target.value)} placeholder="e.g. 19.98" type="number" inputMode="decimal"
+                          style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}
+                          onFocus={e => e.target.style.borderColor = "#6366f1"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+                      </div>
+                    </div>
+                  )}
                 </>
               ) : (
                 <>
