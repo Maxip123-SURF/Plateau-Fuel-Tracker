@@ -7556,22 +7556,44 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
 
   // ── Driver Database ────────────────────────────────────────────────────
   const renderDrivers = () => {
-    // Build driver profiles from entries
+    // Build driver profiles from entries — merge near-matches (case, 1-2 letter typos)
     const driverMap = {};
+    const driverKeys = []; // track all canonical keys for fuzzy lookup
+    const findMatchingKey = (nameKey) => {
+      // Exact match first
+      if (driverMap[nameKey]) return nameKey;
+      // Fuzzy match: edit distance <= 2 on lowercase names
+      for (const existing of driverKeys) {
+        if (Math.abs(existing.length - nameKey.length) > 2) continue; // quick length check
+        if (editDistance(nameKey, existing) <= 2) return existing;
+      }
+      return null;
+    };
     for (const e of entries) {
       const name = e.driverName || e.driver || "";
       if (!name) continue;
-      const key = name.trim().toLowerCase();
+      const nameKey = name.trim().toLowerCase();
+      const matchedKey = findMatchingKey(nameKey);
+      const key = matchedKey || nameKey;
       if (!driverMap[key]) {
-        driverMap[key] = { name: name.trim(), entries: [], vehicles: new Set(), divisions: new Set(), totalLitres: 0, totalCost: 0, lastEntry: null };
+        driverMap[key] = { name: name.trim(), entries: [], vehicles: new Set(), divisions: new Set(), totalLitres: 0, totalCost: 0, lastEntry: null, nameVariants: {} };
+        driverKeys.push(key);
       }
       const d = driverMap[key];
+      // Track name variants to pick the most common spelling
+      const trimmed = name.trim();
+      d.nameVariants[trimmed] = (d.nameVariants[trimmed] || 0) + 1;
       d.entries.push(e);
       if (e.registration) d.vehicles.add(e.registration);
       if (e.division) d.divisions.add(e.division);
       d.totalLitres += parseFloat(e.litres) || 0;
       d.totalCost += parseFloat(e.totalCost) || 0;
       if (!d.lastEntry || (e.date && e.date > (d.lastEntry.date || ""))) d.lastEntry = e;
+    }
+    // Set display name to most common variant
+    for (const d of Object.values(driverMap)) {
+      const best = Object.entries(d.nameVariants).sort((a, b) => b[1] - a[1])[0];
+      if (best) d.name = best[0];
     }
 
     // Sort by name
@@ -7602,25 +7624,23 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         {(() => {
           const now = new Date();
           const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate() - 7);
-          const allDriverNames = [...new Set(entries.map(e => e.driverName || e.driver).filter(Boolean))].sort();
+          // Use merged driver list to avoid duplicates
+          const allDriverNames = Object.values(driverMap).map(d => d.name).sort();
           const activeDrivers = new Set();
-          entries.forEach(e => {
-            const name = e.driverName || e.driver;
-            if (!name || !e.date) return;
-            const d = parseDate(e.date);
-            if (d && new Date(d) >= weekAgo) activeDrivers.add(name);
+          Object.values(driverMap).forEach(d => {
+            d.entries.forEach(e => {
+              if (!e.date) return;
+              const dt = parseDate(e.date);
+              if (dt && new Date(dt) >= weekAgo) activeDrivers.add(d.name);
+            });
           });
           const inactiveDrivers = allDriverNames.filter(d => !activeDrivers.has(d));
           const driverLastEntry = {};
-          entries.forEach(e => {
-            const name = e.driverName || e.driver;
-            if (!name) return;
-            const d = parseDate(e.date);
-            if (!d) return;
-            const dt = new Date(d);
-            if (!driverLastEntry[name] || dt > driverLastEntry[name].dt) {
-              driverLastEntry[name] = { dt, date: e.date, rego: e.registration || e.equipment || "" };
-            }
+          Object.values(driverMap).forEach(drv => {
+            if (!drv.lastEntry) return;
+            const ts = parseDate(drv.lastEntry.date);
+            if (!ts) return;
+            driverLastEntry[drv.name] = { dt: new Date(ts), date: drv.lastEntry.date, rego: drv.lastEntry.registration || drv.lastEntry.equipment || "" };
           });
           if (allDriverNames.length === 0) return null;
           return (
@@ -7737,6 +7757,17 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                   border: "1px solid #e2e8f0", borderTop: "none", borderRadius: "0 0 10px 10px",
                   padding: "12px 14px", background: "#f8fafc",
                 }}>
+                  {/* Merged names notice */}
+                  {Object.keys(driver.nameVariants).length > 1 && (
+                    <div style={{
+                      background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 6,
+                      padding: "6px 10px", marginBottom: 10, fontSize: 10, color: "#1e40af",
+                    }}>
+                      <strong>Merged spellings:</strong>{" "}
+                      {Object.entries(driver.nameVariants).map(([v, count]) => `"${v}" (${count}×)`).join(", ")}
+                    </div>
+                  )}
+
                   {/* Driver summary */}
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
                     {[
