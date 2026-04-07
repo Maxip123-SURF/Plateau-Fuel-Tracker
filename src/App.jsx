@@ -3390,16 +3390,19 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     let nextLineIdx = 0; // tracks which receipt line to match next
     let nextOtherIdx = 0; // tracks which otherItem to match next
 
-    const buildEntry = (rego, division, vehicleType, odometer, litres, regoMatch, matchedLine) => {
+    const buildEntry = (rego, division, vehicleType, odometer, litres, regoMatch, matchedLine, userPplOverride) => {
       const lineFuelType = matchedLine?.fuelType || baseFuelType || regoMatch?.f || "";
       const parsedLitres = parseFloat(litres) || null;
       const scannedLineCost = matchedLine?.cost || null;
       const scannedLineLitres = matchedLine?.litres || null;
 
-      // Price per litre: use scanned line's price directly
-      // Only recalculate from cost÷litres if user litres match scanned litres (non-split)
+      // Price per litre priority: user-entered > scanned line > calculated from cost÷litres > global
+      // If the user manually typed a price, that ALWAYS takes precedence over the AI scan.
       let linePpl;
-      if (matchedLine?.pricePerLitre) {
+      if (userPplOverride && userPplOverride > 0) {
+        // User explicitly entered $/L — trust their input first
+        linePpl = userPplOverride;
+      } else if (matchedLine?.pricePerLitre) {
         linePpl = matchedLine.pricePerLitre;
       } else if (scannedLineCost && scannedLineLitres && scannedLineLitres > 0) {
         linePpl = parseFloat((scannedLineCost / scannedLineLitres).toFixed(4));
@@ -3451,10 +3454,12 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       : (parseFloat(form.litres) || primaryLine?.litres || parsedLitresTotal);
     // ALWAYS pass the primary fuel line data (not just in split mode)
     // so buildEntry can use its cost/price instead of the global ppl
+    // Pass user-entered price per litre so it takes precedence over AI scan
+    const userEnteredPpl = parseFloat(form.ppl) || null;
     const primaryEntry = buildEntry(
       form.registration.trim().toUpperCase(),
       form.division, form.vehicleType,
-      form.odometer, primaryLitres, primaryMatch, primaryLine
+      form.odometer, primaryLitres, primaryMatch, primaryLine, userEnteredPpl
     );
 
     let allNew = entries;
@@ -3634,11 +3639,12 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             const remainder = parseFloat((parsedLitresTotal - v1Used - otherSplitsUsed).toFixed(2));
             if (remainder > 0) spLitresVal = remainder;
           }
+          const spUserPpl = parseFloat(sp.ppl) || null;
           const splitEntry = buildEntry(
             sp.rego.trim().toUpperCase(),
             sp.division || match?.d || "",
             sp.vehicleType || match?.t || "",
-            sp.odometer, spLitresVal || 0, match, matchedLine
+            sp.odometer, spLitresVal || 0, match, matchedLine, spUserPpl
           );
           if (sp._costOverride) splitEntry.totalCost = parseFloat(sp._costOverride) || splitEntry.totalCost;
           if (sp._pplOverride) splitEntry.pricePerLitre = parseFloat(sp._pplOverride) || splitEntry.pricePerLitre;
@@ -5199,11 +5205,29 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             });
             line = availableLinesForReview.splice(bestIdx, 1)[0];
           } else if (availableLinesForReview.length > 1) {
-            // Match by vehicle size
-            const rank = VEHICLE_FUEL_RANK[spType] || 99;
-            const sorted = availableLinesForReview.map((l, i) => ({ l, i })).sort((a, b) => (b.l.litres || 0) - (a.l.litres || 0));
-            const pickIdx = rank <= 5 ? sorted[0].i : sorted[sorted.length - 1].i;
-            line = availableLinesForReview.splice(pickIdx, 1)[0];
+            // Try fuel type matching first (diesel→diesel, unleaded→unleaded)
+            const spFuel = (sp.fuelType || sp._match?.f || "").toLowerCase();
+            let fuelMatchIdx = -1;
+            if (spFuel) {
+              const isDiesel = (f) => /diesel|gas\s*oil/i.test(f);
+              const isUnleaded = (f) => /unleaded|petrol|premium\s*\d|e10|ulp|pulp|95|98/i.test(f);
+              fuelMatchIdx = availableLinesForReview.findIndex(l => {
+                const lFuel = (l.fuelType || "").toLowerCase();
+                if (!lFuel) return false;
+                if (isDiesel(spFuel) && isDiesel(lFuel)) return true;
+                if (isUnleaded(spFuel) && isUnleaded(lFuel)) return true;
+                return lFuel.includes(spFuel) || spFuel.includes(lFuel);
+              });
+            }
+            if (fuelMatchIdx >= 0) {
+              line = availableLinesForReview.splice(fuelMatchIdx, 1)[0];
+            } else {
+              // Fallback: match by vehicle size
+              const rank = VEHICLE_FUEL_RANK[spType] || 99;
+              const sorted = availableLinesForReview.map((l, i) => ({ l, i })).sort((a, b) => (b.l.litres || 0) - (a.l.litres || 0));
+              const pickIdx = rank <= 5 ? sorted[0].i : sorted[sorted.length - 1].i;
+              line = availableLinesForReview.splice(pickIdx, 1)[0];
+            }
           } else {
             line = availableLinesForReview.shift();
           }
@@ -5426,19 +5450,33 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             ];
           } else {
             const spMatch = sp._match || lookupRego(sp.rego, learnedDBRef.current, entriesRef.current);
-            const spPpl = ml?.pricePerLitre || globalPpl || 0;
-            // Use user-entered litres, or calculate remaining litres from total
+            // Price: user-entered > scanned line > global
+            const spUserPpl = parseFloat(sp.ppl) || 0;
+            const spPpl = spUserPpl > 0 ? spUserPpl : (ml?.pricePerLitre || globalPpl || 0);
+            // Litres priority: user-entered > AI scanned line > remainder calculation
             const spUserLitres = parseFloat(sp.litres) || 0;
             let spDisplayLitres = sp.litres;
-            if (!spUserLitres && receiptData?.litres > 0) {
+            let litresSource = spUserLitres > 0 ? "user" : null;
+            if (!spUserLitres && ml?.litres) {
+              // AI matched a scanned line with litres — use it
+              spDisplayLitres = ml.litres.toString();
+              litresSource = "scan";
+            }
+            if (!spUserLitres && !ml?.litres && receiptData?.litres > 0) {
+              // No user input and no matched line — try remainder calculation
               const v1Used = parseFloat(form.litres) || 0;
               const otherUsed = splits.filter(s => s.splitType === "vehicle" && s.id !== sp.id).reduce((s, o) => s + (parseFloat(o.litres) || 0), 0);
               const rem = parseFloat((receiptData.litres - v1Used - otherUsed).toFixed(2));
-              if (rem > 0) spDisplayLitres = rem.toString();
+              if (rem > 0) { spDisplayLitres = rem.toString(); litresSource = "remainder"; }
             }
             const spFinalLitres = parseFloat(spDisplayLitres) || 0;
-            // Cost = litres × price per litre (not the full receipt line cost)
-            const spCalcCost = spFinalLitres > 0 && spPpl > 0 ? (spFinalLitres * spPpl).toFixed(2) : "";
+            // Cost: use scanned line cost if litres match, otherwise calculate
+            let spCalcCost;
+            if (ml?.cost && ml?.litres && spFinalLitres > 0 && Math.abs(spFinalLitres - ml.litres) < 0.5) {
+              spCalcCost = ml.cost.toFixed(2);
+            } else {
+              spCalcCost = spFinalLitres > 0 && spPpl > 0 ? (spFinalLitres * spPpl).toFixed(2) : "";
+            }
             spRows = [
               { label: "Registration", val: sp.rego, set: v => updateSplit(sp.id, "rego", v.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 6)) },
               { label: "Vehicle", val: sp._vehicleOverride || spMatch?.n || spMatch?.t || "\u2014", set: v => updateSplit(sp.id, "_vehicleOverride", v) },
@@ -5448,6 +5486,10 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               { label: "$/L", val: sp._pplOverride || spPpl?.toString() || "", set: v => updateSplit(sp.id, "_pplOverride", v) },
               { label: "Cost", val: sp._costOverride || spCalcCost, set: v => updateSplit(sp.id, "_costOverride", v) },
             ];
+            // Show hint if values were auto-filled from AI scan
+            if (litresSource === "scan" && ml) {
+              spRows.push({ label: "\uD83E\uDD16 Auto-filled", val: `From receipt line: ${ml.fuelType || "fuel"} — ${ml.litres}L @ $${ml.pricePerLitre || "?"}/L`, set: null });
+            }
           }
           return (
             <div key={sp.id}>
