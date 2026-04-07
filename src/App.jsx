@@ -744,7 +744,7 @@ function normalizeReceiptData(data) {
   // If all 3 exist, verify they're consistent (within 2% tolerance for rounding).
   // If inconsistent, trust the two values that produce a reasonable Australian fuel price ($1-$4/L).
   const ppl = data.pricePerLitre;
-  data._mathIssues = [];
+  data._mathIssues = data._mathIssues || [];
 
   // If there's only one fuel line and it's missing cost, inherit from totalCost
   if (data.lines.length === 1 && !data.lines[0].cost && data.totalCost) {
@@ -2029,7 +2029,7 @@ function InlineReceipt({ entryId, loadFn }) {
         }} onClick={e => {
           // Open full-size in new tab for zooming
           const w = window.open();
-          if (w) { w.document.write(`<img src="${img.url || `data:${img.mime};base64,${img.b64}`}" style="max-width:100%">`); w.document.title = "Receipt"; }
+          if (w) { const imgEl = w.document.createElement("img"); imgEl.src = img.url || `data:${img.mime};base64,${img.b64}`; imgEl.style.maxWidth = "100%"; w.document.body.appendChild(imgEl); w.document.title = "Receipt"; }
         }} />
       ) : (
         <div style={{ textAlign: "center", padding: "16px 0", color: "#94a3b8", fontSize: 11 }}>No receipt image found</div>
@@ -2193,7 +2193,7 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
                   width: "100%", borderRadius: 8, border: "1px solid #e2e8f0", cursor: "zoom-in",
                 }} onClick={() => {
                   const w = window.open();
-                  if (w) { w.document.write(`<img src="${receiptImg.url || `data:${receiptImg.mime};base64,${receiptImg.b64}`}" style="max-width:100%">`); w.document.title = "Receipt"; }
+                  if (w) { const imgEl = w.document.createElement("img"); imgEl.src = receiptImg.url || `data:${receiptImg.mime};base64,${receiptImg.b64}`; imgEl.style.maxWidth = "100%"; w.document.body.appendChild(imgEl); w.document.title = "Receipt"; }
                 }} />
               ) : (
                 <div style={{ textAlign: "center", padding: "32px 0", color: "#94a3b8", fontSize: 12 }}>No receipt image found</div>
@@ -2401,7 +2401,7 @@ function ServiceModal({ rego, current, onSave, onClose, vehicleType: vtProp }) {
             <div style={{ display: "flex", gap: 16 }}>
               <span><span style={{ color: "#64748b" }}>Date:</span> <strong>{latest.lastServiceDate}</strong></span>
               <span><span style={{ color: "#64748b" }}>{isHoursBased(vtProp) ? "Hours:" : "Odometer:"}</span> <strong>{latest.lastServiceKms?.toLocaleString()} {odoUnit(vtProp)}</strong></span>
-              <span><span style={{ color: "#64748b" }}>Next due:</span> <strong>{(latest.lastServiceKms + serviceInterval(vtProp)).toLocaleString()} {odoUnit(vtProp)}</strong></span>
+              {latest.lastServiceKms != null && <span><span style={{ color: "#64748b" }}>Next due:</span> <strong>{(latest.lastServiceKms + serviceInterval(vtProp)).toLocaleString()} {odoUnit(vtProp)}</strong></span>}
             </div>
           </div>
         )}
@@ -2684,6 +2684,7 @@ export default function App() {
   const [showAiFlags, setShowAiFlags] = useState(false);
   const [resolvedFlags, setResolvedFlags] = useState({}); // { "flagId": { by, note, at } }
   const [flagsFilter, setFlagsFilter] = useState("open"); // "open" | "resolved" | "all"
+  const [aiFlagsFilter, setAiFlagsFilter] = useState("open"); // separate filter for AI flags modal
   const [replyingFlag, setReplyingFlag] = useState(null); // flagId currently being responded to
   const [flagsRegoSearch, setFlagsRegoSearch] = useState(""); // rego search in flags modal
   const [expandedReceipt, setExpandedReceipt] = useState(null); // flagId or entryId whose receipt is shown inline
@@ -3112,7 +3113,7 @@ export default function App() {
     }
     setForm(base);
     setOtherMode(false);
-    setOtherForm({ equipment: "", station: "", fleetCard: "", cardRego: "", notes: "", division: "Tree" });
+    setOtherForm({ equipment: "", station: "", fleetCard: "", cardRego: "", notes: "", division: "Tree", litres: "", ppl: "", totalCost: "" });
     setDriverCards([]);
     setReceiptPreview(null); setReceiptB64(null); setReceiptData(null); setReceiptMime("image/jpeg");
     setReceiptRotation(0); setReceiptFile(null);
@@ -6360,7 +6361,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     });
 
     return vehicles;
-  }, [entries, serviceData, resolvedFlags]);
+  }, [entries, serviceData]);
 
   // ── Dashboard view ────────────────────────────────────────────────────────
   const renderDashboard = () => {
@@ -7411,7 +7412,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     const flagsWithId = allAiFlags.map(f => ({ ...f, _id: flagId(f) }));
     const openFlags = flagsWithId.filter(f => !resolvedFlags[f._id]);
     const doneFlags = flagsWithId.filter(f => resolvedFlags[f._id]);
-    const visibleFlags = flagsFilter === "open" ? openFlags : flagsFilter === "resolved" ? doneFlags : flagsWithId;
+    const visibleFlags = aiFlagsFilter === "open" ? openFlags : aiFlagsFilter === "resolved" ? doneFlags : flagsWithId;
 
     return (
       <div style={{
@@ -7462,22 +7463,22 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               { key: "resolved", label: `Resolved (${doneFlags.length})` },
               { key: "all", label: `All (${flagsWithId.length})` },
             ].map(tab => (
-              <button key={tab.key} onClick={() => setFlagsFilter(tab.key)} style={{
-                padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: flagsFilter === tab.key ? 700 : 500,
+              <button key={tab.key} onClick={() => setAiFlagsFilter(tab.key)} style={{
+                padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: aiFlagsFilter === tab.key ? 700 : 500,
                 cursor: "pointer", fontFamily: "inherit",
-                background: flagsFilter === tab.key ? "#7c3aed" : "#f8fafc",
-                color: flagsFilter === tab.key ? "white" : "#64748b",
-                border: `1px solid ${flagsFilter === tab.key ? "#7c3aed" : "#e2e8f0"}`,
+                background: aiFlagsFilter === tab.key ? "#7c3aed" : "#f8fafc",
+                color: aiFlagsFilter === tab.key ? "white" : "#64748b",
+                border: `1px solid ${aiFlagsFilter === tab.key ? "#7c3aed" : "#e2e8f0"}`,
               }}>{tab.label}</button>
             ))}
           </div>
 
           {/* Flag list */}
           {visibleFlags.length === 0 ? (
-            <div style={{ textAlign: "center", padding: "32px 0", color: flagsFilter === "open" ? "#15803d" : "#94a3b8" }}>
-              <div style={{ fontSize: 36, marginBottom: 8 }}>{flagsFilter === "open" ? "\u2713" : "\uD83E\uDD16"}</div>
+            <div style={{ textAlign: "center", padding: "32px 0", color: aiFlagsFilter === "open" ? "#15803d" : "#94a3b8" }}>
+              <div style={{ fontSize: 36, marginBottom: 8 }}>{aiFlagsFilter === "open" ? "\u2713" : "\uD83E\uDD16"}</div>
               <div style={{ fontWeight: 600 }}>
-                {flagsFilter === "open" ? "All AI flags reviewed!" : flagsFilter === "resolved" ? "No resolved flags yet." : "No AI flags found."}
+                {aiFlagsFilter === "open" ? "All AI flags reviewed!" : aiFlagsFilter === "resolved" ? "No resolved flags yet." : "No AI flags found."}
               </div>
             </div>
           ) : (
@@ -7563,7 +7564,10 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       // Exact match first
       if (driverMap[nameKey]) return nameKey;
       // Fuzzy match: edit distance <= 2 on lowercase names
+      // Only fuzzy match names with 5+ characters to avoid merging short unrelated names (e.g. "Ben" & "Dan")
+      if (nameKey.length < 5) return null;
       for (const existing of driverKeys) {
+        if (existing.length < 5) continue;
         if (Math.abs(existing.length - nameKey.length) > 2) continue; // quick length check
         if (editDistance(nameKey, existing) <= 2) return existing;
       }
@@ -7588,7 +7592,9 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       if (e.division) d.divisions.add(e.division);
       d.totalLitres += parseFloat(e.litres) || 0;
       d.totalCost += parseFloat(e.totalCost) || 0;
-      if (!d.lastEntry || (e.date && e.date > (d.lastEntry.date || ""))) d.lastEntry = e;
+      const eTs = parseDate(e.date);
+      const lastTs = d.lastEntry ? parseDate(d.lastEntry.date) : 0;
+      if (!d.lastEntry || (eTs && eTs > (lastTs || 0))) d.lastEntry = e;
     }
     // Set display name to most common variant
     for (const d of Object.values(driverMap)) {
@@ -7717,7 +7723,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         {driverList.map(driver => {
           const isExpanded = expandedDriver === driver.name.toLowerCase();
           const lastE = driver.lastEntry;
-          const sortedEntries = [...driver.entries].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+          const sortedEntries = [...driver.entries].sort((a, b) => (parseDate(b.date) || 0) - (parseDate(a.date) || 0));
 
           return (
             <div key={driver.name} style={{ marginBottom: 8 }}>
