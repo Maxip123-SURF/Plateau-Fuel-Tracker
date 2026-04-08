@@ -2716,6 +2716,8 @@ export default function App() {
   const [expandedFuelType, setExpandedFuelType] = useState(null);
   const [collapsedFleetGroups, setCollapsedFleetGroups] = useState({});
   const [worseningFilter, setWorseningFilter] = useState(false); // highlight worsening vehicles on dashboard
+  const [overdueFilter, setOverdueFilter] = useState(false); // show overdue vehicles on dashboard
+  const [approachingFilter, setApproachingFilter] = useState(false); // show approaching service vehicles on dashboard
   const [vehicleSpendSort, setVehicleSpendSort] = useState("cost-desc");
   const [expandedSpendVehicle, setExpandedSpendVehicle] = useState(null); // rego expanded in spend section
   const [pendingExtraEntries, setPendingExtraEntries] = useState(null); // auto-detected extra receipt lines after submission
@@ -6486,7 +6488,11 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                       const vehicleFlags = [];
                       sorted.forEach((e, i) => {
                         const flags = getEntryFlags(e, i > 0 ? sorted[i - 1] : null, vt, serviceData[rego]);
-                        flags.forEach(f => vehicleFlags.push({ ...f, rego, entryDate: e.date, odo: e.odometer }));
+                        flags.forEach(f => {
+                          const enriched = { ...f, rego, entryDate: e.date, odo: e.odometer, _entry: e };
+                          enriched._id = flagId(enriched);
+                          vehicleFlags.push(enriched);
+                        });
                       });
                       // Filter out resolved flags
                       const openVehicleFlags = vehicleFlags.filter(f => !resolvedFlags[flagId(f)]);
@@ -6566,19 +6572,70 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                                   background: "none", border: "none", cursor: "pointer", color: "#94a3b8", fontSize: 16, lineHeight: 1,
                                 }}>{"\u00D7"}</button>
                               </div>
-                              {flagDetailPopup.flags.map((f, fi) => (
-                                <div key={fi} style={{
-                                  background: "white", borderRadius: 6, padding: "8px 10px", marginBottom: fi < flagDetailPopup.flags.length - 1 ? 6 : 0,
-                                  border: `1px solid ${flagDetailPopup.filterType === "ai" ? "#e9d5ff" : flagDetailPopup.filterType === "danger" ? "#fecaca" : "#fde68a"}`,
+                              {flagDetailPopup.flags.map((f, fi) => {
+                                const isResolved = resolvedFlags[f._id];
+                                const resolveInfo = isResolved ? resolvedFlags[f._id] : null;
+                                return (
+                                <div key={f._id || fi} style={{
+                                  background: isResolved ? "#f0fdf4" : "white", borderRadius: 6, padding: "8px 10px", marginBottom: fi < flagDetailPopup.flags.length - 1 ? 6 : 0,
+                                  border: `1px solid ${isResolved ? "#86efac" : flagDetailPopup.filterType === "ai" ? "#e9d5ff" : flagDetailPopup.filterType === "danger" ? "#fecaca" : "#fde68a"}`,
+                                  opacity: isResolved ? 0.7 : 1,
                                 }}>
-                                  <div style={{ fontSize: 11, fontWeight: 700, color: "#0f172a", marginBottom: 3 }}>
-                                    {f.text}
-                                    {f.entryDate && <span style={{ fontWeight: 400, color: "#94a3b8", marginLeft: 6 }}>{f.entryDate}</span>}
+                                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                                    <div style={{ flex: 1 }}>
+                                      <div style={{ fontSize: 11, fontWeight: 700, color: isResolved ? "#15803d" : "#0f172a", marginBottom: 3 }}>
+                                        {isResolved && <span style={{ marginRight: 4 }}>{"\u2713"}</span>}
+                                        {f.text}
+                                        {f.entryDate && <span style={{ fontWeight: 400, color: "#94a3b8", marginLeft: 6 }}>{f.entryDate}</span>}
+                                      </div>
+                                      <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.4 }}>{f.detail}</div>
+                                      {f.odo && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 3 }}>Odo: {f.odo.toLocaleString()}</div>}
+                                      {resolveInfo && (
+                                        <div style={{ fontSize: 10, color: "#15803d", marginTop: 4, fontStyle: "italic" }}>
+                                          Resolved{resolveInfo.by ? ` by ${resolveInfo.by}` : ""}{resolveInfo.note ? `: ${resolveInfo.note}` : ""}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+                                      {f._entry?.hasReceipt && (
+                                        <button onClick={() => setExpandedReceipt(expandedReceipt === f._id ? null : f._id)} style={{
+                                          padding: "4px 8px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                                          background: expandedReceipt === f._id ? "#7c3aed" : "#faf5ff",
+                                          color: expandedReceipt === f._id ? "white" : "#7c3aed",
+                                          border: `1px solid ${expandedReceipt === f._id ? "#7c3aed" : "#c4b5fd"}`,
+                                          cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                                        }}>{"\uD83D\uDCC4"} {expandedReceipt === f._id ? "Hide" : "Receipt"}</button>
+                                      )}
+                                      {f._entry && (
+                                        <button onClick={() => { setEditingEntry(f._entry); setFlagDetailPopup(null); }} style={{
+                                          padding: "4px 8px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                                          background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe",
+                                          cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                                        }}>{"\u270E"} Edit</button>
+                                      )}
+                                      {!isResolved ? (
+                                        <button onClick={() => resolveFlag(f._id, "Reviewed — no action needed", "Admin")} style={{
+                                          padding: "4px 8px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                                          background: "#f0fdf4", color: "#15803d", border: "1px solid #86efac",
+                                          cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                                        }}>{"\u2713"} Resolve</button>
+                                      ) : (
+                                        <button onClick={() => unresolveFlag(f._id)} style={{
+                                          padding: "4px 8px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                                          background: "#fef2f2", color: "#dc2626", border: "1px solid #fca5a5",
+                                          cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                                        }}>{"\u21A9"} Reopen</button>
+                                      )}
+                                    </div>
                                   </div>
-                                  <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.4 }}>{f.detail}</div>
-                                  {f.odo && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 3 }}>Odo: {f.odo.toLocaleString()}</div>}
+                                  {expandedReceipt === f._id && f._entry?.hasReceipt && (
+                                    <div style={{ marginTop: 8 }}>
+                                      <InlineReceipt entryId={f._entry.id} loadFn={loadReceiptImage} />
+                                    </div>
+                                  )}
                                 </div>
-                              ))}
+                                );
+                              })}
                               {flagDetailPopup.flags.length === 0 && (
                                 <div style={{ fontSize: 11, color: "#94a3b8", textAlign: "center", padding: 8 }}>No issues found</div>
                               )}
@@ -7074,12 +7131,22 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     const periodVehicles = Object.values(periodByVehicle).sort((a, b) => b.cost - a.cost);
     const periodTotalKm = periodVehicles.reduce((s, v) => s + v.km, 0);
 
-    // Sort fleet: when worsening filter active, bring those to top; otherwise overdue first
+    // Sort fleet: when filter active, bring matching vehicles to top
     const sorted = [...fleet].sort((a, b) => {
       if (worseningFilter) {
         const aw = a.trend === "worsening" ? 0 : 1;
         const bw = b.trend === "worsening" ? 0 : 1;
         if (aw !== bw) return aw - bw;
+      }
+      if (overdueFilter) {
+        const ao = a.svcStatus === "overdue" ? 0 : 1;
+        const bo = b.svcStatus === "overdue" ? 0 : 1;
+        if (ao !== bo) return ao - bo;
+      }
+      if (approachingFilter) {
+        const aa = a.svcStatus === "approaching" ? 0 : 1;
+        const ba = b.svcStatus === "approaching" ? 0 : 1;
+        if (aa !== ba) return aa - ba;
       }
       const statusOrder = { overdue: 0, approaching: 1, unknown: 2, ok: 3 };
       const sa = statusOrder[a.svcStatus] ?? 2;
@@ -7497,14 +7564,28 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
 
         {/* Alert cards */}
         <div className="kpi-grid-3" style={{ marginBottom: 20 }}>
-          <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 10, padding: "12px 10px", textAlign: "center" }}>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#dc2626" }}>{overdue.length}</div>
-            <div style={{ fontSize: 10, color: "#b91c1c", marginTop: 2, fontWeight: 600 }}>Service Overdue</div>
-          </div>
-          <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 10, padding: "12px 10px", textAlign: "center" }}>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#b45309" }}>{approaching.length}</div>
-            <div style={{ fontSize: 10, color: "#92400e", marginTop: 2, fontWeight: 600 }}>Service Due Soon</div>
-          </div>
+          <button onClick={() => { setOverdueFilter(!overdueFilter); setApproachingFilter(false); }} style={{
+            background: overdueFilter ? "#dc2626" : "#fef2f2",
+            border: `2px solid ${overdueFilter ? "#dc2626" : "#fca5a5"}`,
+            borderRadius: 10, padding: "12px 10px", textAlign: "center", cursor: "pointer",
+            fontFamily: "inherit", width: "100%", transition: "all 0.2s",
+          }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: overdueFilter ? "white" : "#dc2626" }}>{overdue.length}</div>
+            <div style={{ fontSize: 10, color: overdueFilter ? "rgba(255,255,255,0.9)" : "#b91c1c", marginTop: 2, fontWeight: 600 }}>
+              {overdueFilter ? "\u2713 Showing Overdue" : "Service Overdue"}
+            </div>
+          </button>
+          <button onClick={() => { setApproachingFilter(!approachingFilter); setOverdueFilter(false); }} style={{
+            background: approachingFilter ? "#b45309" : "#fffbeb",
+            border: `2px solid ${approachingFilter ? "#b45309" : "#fcd34d"}`,
+            borderRadius: 10, padding: "12px 10px", textAlign: "center", cursor: "pointer",
+            fontFamily: "inherit", width: "100%", transition: "all 0.2s",
+          }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: approachingFilter ? "white" : "#b45309" }}>{approaching.length}</div>
+            <div style={{ fontSize: 10, color: approachingFilter ? "rgba(255,255,255,0.9)" : "#92400e", marginTop: 2, fontWeight: 600 }}>
+              {approachingFilter ? "\u2713 Showing Due Soon" : "Service Due Soon"}
+            </div>
+          </button>
           <button onClick={() => setWorseningFilter(!worseningFilter)} style={{
             background: worseningFilter ? "#c2410c" : "#fff7ed",
             border: `2px solid ${worseningFilter ? "#c2410c" : "#fdba74"}`,
@@ -7574,6 +7655,137 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                         background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe",
                         cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
                       }}>{"\uD83D\uDCCA"} View History</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Service overdue detail panel */}
+        {overdueFilter && overdue.length > 0 && (
+          <div className="fade-in" style={{
+            background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 10,
+            padding: 16, marginBottom: 20,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#dc2626" }}>
+                {"\u26A0"} {overdue.length} Vehicle{overdue.length !== 1 ? "s" : ""} with Overdue Service
+              </div>
+              <button onClick={() => setOverdueFilter(false)} style={{
+                background: "none", border: "none", fontSize: 18, color: "#dc2626", cursor: "pointer",
+              }}>{"\u00D7"}</button>
+            </div>
+            <div style={{ fontSize: 11, color: "#991b1b", marginBottom: 12 }}>
+              These vehicles have exceeded their scheduled service interval and need attention.
+            </div>
+            {overdue.map(v => {
+              const hb = isHoursBased(v.vt);
+              const unit = hb ? "hrs" : "km";
+              return (
+                <div key={v.rego} style={{
+                  background: "white", border: "1px solid #fecaca", borderRadius: 8,
+                  padding: "10px 14px", marginBottom: 8,
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontWeight: 700, color: "#0f172a", fontSize: 14 }}>{v.rego}</span>
+                        {v.vehicleName && <span style={{ fontSize: 11, color: "#94a3b8" }}>{v.vehicleName}</span>}
+                        <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#fef2f2", color: "#dc2626", fontWeight: 600, border: "1px solid #fca5a5" }}>
+                          OVERDUE
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", gap: 16, fontSize: 11, color: "#64748b", marginTop: 4, flexWrap: "wrap" }}>
+                        <span>{v.div} {"\u00B7"} {v.vt}</span>
+                        {v.svc?.lastServiceDate && <span>Last service: <strong style={{ color: "#374151" }}>{v.svc.lastServiceDate}</strong></span>}
+                        {v.nextServiceDue && <span>Due at: <strong style={{ color: "#dc2626" }}>{v.nextServiceDue.toLocaleString()} {unit}</strong></span>}
+                        {v.latestOdo && <span>Current: <strong style={{ color: "#374151" }}>{v.latestOdo.toLocaleString()} {unit}</strong></span>}
+                        {v.kmSinceService != null && <span>Since service: <strong style={{ color: "#dc2626" }}>{Math.round(v.kmSinceService).toLocaleString()} {unit}</strong></span>}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                      <button onClick={() => {
+                        setView("data"); setDataSearch(v.rego); setExpandedRego(v.rego);
+                      }} style={{
+                        padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                        background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe",
+                        cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                      }}>{"\uD83D\uDCCA"} View</button>
+                      <button onClick={() => {
+                        setView("data"); setServiceModal(v.rego);
+                      }} style={{
+                        padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                        background: "#f0fdf4", color: "#15803d", border: "1px solid #86efac",
+                        cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                      }}>{"\uD83D\uDD27"} Service</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Service due soon detail panel */}
+        {approachingFilter && approaching.length > 0 && (
+          <div className="fade-in" style={{
+            background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 10,
+            padding: 16, marginBottom: 20,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#b45309" }}>
+                {"\u26A1"} {approaching.length} Vehicle{approaching.length !== 1 ? "s" : ""} with Service Due Soon
+              </div>
+              <button onClick={() => setApproachingFilter(false)} style={{
+                background: "none", border: "none", fontSize: 18, color: "#b45309", cursor: "pointer",
+              }}>{"\u00D7"}</button>
+            </div>
+            <div style={{ fontSize: 11, color: "#92400e", marginBottom: 12 }}>
+              These vehicles are approaching their next service interval. Schedule maintenance soon.
+            </div>
+            {approaching.map(v => {
+              const hb = isHoursBased(v.vt);
+              const unit = hb ? "hrs" : "km";
+              return (
+                <div key={v.rego} style={{
+                  background: "white", border: "1px solid #fde68a", borderRadius: 8,
+                  padding: "10px 14px", marginBottom: 8,
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontWeight: 700, color: "#0f172a", fontSize: 14 }}>{v.rego}</span>
+                        {v.vehicleName && <span style={{ fontSize: 11, color: "#94a3b8" }}>{v.vehicleName}</span>}
+                        {v.kmToService != null && (
+                          <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#fffbeb", color: "#b45309", fontWeight: 600, border: "1px solid #fcd34d" }}>
+                            {Math.round(v.kmToService).toLocaleString()} {unit} remaining
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", gap: 16, fontSize: 11, color: "#64748b", marginTop: 4, flexWrap: "wrap" }}>
+                        <span>{v.div} {"\u00B7"} {v.vt}</span>
+                        {v.svc?.lastServiceDate && <span>Last service: <strong style={{ color: "#374151" }}>{v.svc.lastServiceDate}</strong></span>}
+                        {v.nextServiceDue && <span>Due at: <strong style={{ color: "#b45309" }}>{v.nextServiceDue.toLocaleString()} {unit}</strong></span>}
+                        {v.latestOdo && <span>Current: <strong style={{ color: "#374151" }}>{v.latestOdo.toLocaleString()} {unit}</strong></span>}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                      <button onClick={() => {
+                        setView("data"); setDataSearch(v.rego); setExpandedRego(v.rego);
+                      }} style={{
+                        padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                        background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe",
+                        cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                      }}>{"\uD83D\uDCCA"} View</button>
+                      <button onClick={() => {
+                        setView("data"); setServiceModal(v.rego);
+                      }} style={{
+                        padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                        background: "#f0fdf4", color: "#15803d", border: "1px solid #86efac",
+                        cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+                      }}>{"\uD83D\uDD27"} Service</button>
                     </div>
                   </div>
                 </div>
