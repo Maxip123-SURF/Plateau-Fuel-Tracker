@@ -534,6 +534,12 @@ Usually a line showing the date and transaction/receipt number. The date follows
 - "5/4/26" means 5th April 2026
 Always output the date as DD/MM/YYYY with full 4-digit year.
 
+CRITICAL DATE RULE: The date on a receipt can NEVER be in the future. Receipts record past transactions. Today's date is ${new Date().toLocaleDateString("en-AU", { day: "2-digit", month: "2-digit", year: "numeric" })}. If you read a date that appears to be after today, you have almost certainly misread the day, month, or year. Common misreads:
+- Swapping day and month (e.g. reading "04/10" as 10th April when it's actually 4th October)
+- Wrong year (e.g. reading "25" instead of "26" or vice versa)
+- Misreading a digit (e.g. "1" as "7", "5" as "6")
+Double-check: does the date make sense as a PAST date? If not, re-read the digits carefully.
+
 SECTION C — FUEL ENTRIES (the most critical section):
 This section contains fuel purchase information in a roughly columnar format. Each fuel entry is spread across 1 or 2 lines. The columns are typically:
   Column 1: Fuel name/type (e.g. "DIESEL", "UNLEADED", "PREMIUM 95")
@@ -667,8 +673,97 @@ RULES
 - CONFIDENCE: "high" = clear image, all values readable, math checks out. "medium" = some blurry/uncertain digits or used reverse calculation to resolve ambiguity. "low" = very blurry or unreadable. Always list specific digit uncertainties in issues.
 - REMEMBER: READ FIRST, calculate second. The receipt's printed numbers are the primary source of truth. Reverse calculation is your backup tool for resolving uncertain digits — not a replacement for careful reading.`;
 
+// Normalize station name using learned corrections
+function normalizeStationName(rawStation, learnedCorrections) {
+  if (!rawStation || !learnedCorrections?.stations) return rawStation;
+  const trimmed = rawStation.trim();
+  const key = trimmed.toUpperCase();
+  // Exact match first
+  if (learnedCorrections.stations[key]) {
+    const canonical = learnedCorrections.stations[key].canonical;
+    console.log(`[Learn] Station auto-corrected: "${rawStation}" → "${canonical}"`);
+    return canonical;
+  }
+  // Fuzzy match: try cleaning common variations (removing punctuation, extra spaces)
+  const cleaned = key.replace(/[^A-Z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+  for (const [storedKey, mapping] of Object.entries(learnedCorrections.stations)) {
+    const storedCleaned = storedKey.replace(/[^A-Z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+    if (storedCleaned === cleaned) {
+      console.log(`[Learn] Station fuzzy-matched: "${rawStation}" → "${mapping.canonical}"`);
+      return mapping.canonical;
+    }
+    // Edit distance check (only for short station names to avoid false positives)
+    if (cleaned.length <= 20 && storedCleaned.length <= 20 && typeof editDistance === "function") {
+      const dist = editDistance(cleaned, storedCleaned);
+      if (dist <= 2 && dist < cleaned.length * 0.3) {
+        console.log(`[Learn] Station edit-distance matched (d=${dist}): "${rawStation}" → "${mapping.canonical}"`);
+        return mapping.canonical;
+      }
+    }
+  }
+  return trimmed;
+}
+
+// Apply all learned corrections to freshly scanned receipt data
+function applyLearnedCorrections(data, learnedCorrections) {
+  if (!data || !learnedCorrections) return data;
+
+  // 1. Station name normalization
+  if (data.station) {
+    const corrected = normalizeStationName(data.station, learnedCorrections);
+    if (corrected !== data.station) {
+      data._originalStation = data.station;
+      data.station = corrected;
+      data._stationCorrected = true;
+    }
+  }
+
+  // 2. Fuel type correction for known stations
+  const station = data.station || "";
+  const fuelType = (data.fuelType || "").trim();
+  if (station && fuelType && learnedCorrections.fuelTypeCorrections?.[station]) {
+    const stationFixes = learnedCorrections.fuelTypeCorrections[station];
+    const correctedFuel = stationFixes[fuelType.toUpperCase()];
+    if (correctedFuel) {
+      console.log(`[Learn] Fuel type auto-corrected at "${station}": "${fuelType}" → "${correctedFuel}"`);
+      data._originalFuelType = data.fuelType;
+      data.fuelType = correctedFuel;
+    }
+  }
+  // Also correct fuel types in individual lines
+  if (data.lines && Array.isArray(data.lines) && station && learnedCorrections.fuelTypeCorrections?.[station]) {
+    const stationFixes = learnedCorrections.fuelTypeCorrections[station];
+    data.lines.forEach(line => {
+      if (line.fuelType) {
+        const fix = stationFixes[(line.fuelType || "").toUpperCase()];
+        if (fix) line.fuelType = fix;
+      }
+    });
+  }
+
+  // 3. Price sanity check against station history
+  if (station && data.pricePerLitre && learnedCorrections.stationPrices?.[station]) {
+    const history = learnedCorrections.stationPrices[station];
+    if (history.lastPrices && history.lastPrices.length >= 2) {
+      const avgPrice = history.lastPrices.reduce((s, p) => s + p, 0) / history.lastPrices.length;
+      const scannedPpl = parseFloat(data.pricePerLitre);
+      if (scannedPpl > 0 && avgPrice > 0) {
+        const deviation = Math.abs(scannedPpl - avgPrice) / avgPrice;
+        if (deviation > 0.5) {
+          // Price is >50% different from station average — likely misread
+          if (!data._mathIssues) data._mathIssues = [];
+          data._mathIssues.push(`Price $${scannedPpl.toFixed(3)}/L unusual for ${station} (avg $${avgPrice.toFixed(3)}/L) — check for digit misread`);
+          console.log(`[Learn] Price anomaly at "${station}": scanned $${scannedPpl.toFixed(3)} vs avg $${avgPrice.toFixed(3)}`);
+        }
+      }
+    }
+  }
+
+  return data;
+}
+
 // Normalize receipt data: ensure lines array exists and totals are consistent
-function normalizeReceiptData(data) {
+function normalizeReceiptData(data, learnedCorrections) {
   if (!data) return data;
   // DEBUG: Log raw AI output before any normalization
   console.log("═══ RAW AI SCAN OUTPUT ═══");
@@ -702,6 +797,38 @@ function normalizeReceiptData(data) {
             data._originalDate = data.date;
             data.date = fixed;
           }
+        }
+      }
+    }
+  }
+
+  // CRITICAL: Auto-correct future dates — receipts can NEVER be in the future
+  if (data.date) {
+    const futureTs = parseDate(data.date);
+    if (futureTs) {
+      const futureDate = new Date(futureTs);
+      const today = new Date();
+      today.setHours(23, 59, 59, 999); // allow today
+      if (futureDate > today) {
+        data._originalDate = data._originalDate || data.date;
+        // Try swapping day/month (common DD/MM vs MM/DD confusion)
+        const parts = data.date.match(/(\d{1,2})\D+(\d{1,2})\D+(\d{2,4})/);
+        if (parts) {
+          const [, p1, p2, p3] = parts;
+          const swapped = `${p2}/${p1}/${p3}`;
+          const swappedTs = parseDate(swapped);
+          if (swappedTs && new Date(swappedTs) <= today) {
+            console.log(`[Date Fix] Future date corrected by swapping day/month: "${data.date}" → "${swapped}"`);
+            data.date = swapped;
+            data._futureDateCorrected = true;
+          } else {
+            // Can't auto-fix — flag it prominently
+            data._futureDateDetected = true;
+            console.warn(`[Date Fix] FUTURE DATE DETECTED: "${data.date}" — cannot auto-correct, user must fix`);
+          }
+        } else {
+          data._futureDateDetected = true;
+          console.warn(`[Date Fix] FUTURE DATE DETECTED: "${data.date}" — cannot auto-correct, user must fix`);
         }
       }
     }
@@ -996,6 +1123,11 @@ function normalizeReceiptData(data) {
   console.log("lines:", JSON.stringify(data.lines, null, 2));
   console.log("otherItems:", JSON.stringify(data.otherItems, null, 2));
   if (data._mathIssues?.length) console.log("mathIssues:", data._mathIssues);
+
+  // Apply learned corrections (station names, fuel types, price sanity checks)
+  if (learnedCorrections) {
+    applyLearnedCorrections(data, learnedCorrections);
+  }
 
   return data;
 }
@@ -2665,11 +2797,15 @@ export default function App() {
   const [serviceData, setServiceData] = useState({});
   const [learnedDB, setLearnedDB] = useState({}); // { "REGO": { t, d, n, m, dr, c, f } } — learned from driver submissions
   const [learnedCardMappings, setLearnedCardMappings] = useState({}); // { "raw_unique8": { correctCard, correctRego, rawCard, rawRego, learnedAt } }
+  const [learnedCorrections, setLearnedCorrections] = useState({ stations: {}, stationPrices: {}, digitPatterns: [], fuelTypeCorrections: {}, stats: { totalCorrections: 0, correctionsByField: {}, lastUpdated: null } });
+  const [aiScanSnapshot, setAiScanSnapshot] = useState(null); // frozen copy of AI scan output before user edits
   const learnedCardMappingsRef = useRef(learnedCardMappings);
   const learnedDBRef = useRef(learnedDB);
+  const learnedCorrectionsRef = useRef(learnedCorrections);
   const entriesRef = useRef(entries);
   useEffect(() => { learnedDBRef.current = learnedDB; }, [learnedDB]);
   useEffect(() => { learnedCardMappingsRef.current = learnedCardMappings; }, [learnedCardMappings]);
+  useEffect(() => { learnedCorrectionsRef.current = learnedCorrections; }, [learnedCorrections]);
   useEffect(() => { entriesRef.current = entries; }, [entries]);
   const [storageReady, setStorageReady] = useState(false);
   const [toast, setToast] = useState(null);
@@ -2904,6 +3040,11 @@ export default function App() {
           const cmRes = await window.storage.get("fuel_learned_card_mappings");
           if (cmRes?.value) setLearnedCardMappings(JSON.parse(cmRes.value));
         } catch (_) {}
+        // Load learned corrections (self-learning system)
+        try {
+          const lcRes = await window.storage.get("fuel_learned_corrections");
+          if (lcRes?.value) setLearnedCorrections(JSON.parse(lcRes.value));
+        } catch (_) {}
 
         // Then, try to load from Supabase (cloud — shared across all devices)
         if (supabase) {
@@ -2924,6 +3065,10 @@ export default function App() {
           // Load learned card corrections from cloud
           db.loadSetting("learned_card_mappings").then(raw => {
             if (raw) { try { setLearnedCardMappings(JSON.parse(raw)); } catch (_) {} }
+          }).catch(() => {});
+          // Load learned corrections (self-learning system) from cloud
+          db.loadSetting("learned_corrections").then(raw => {
+            if (raw) { try { setLearnedCorrections(JSON.parse(raw)); } catch (_) {} }
           }).catch(() => {});
         }
 
@@ -3026,6 +3171,155 @@ export default function App() {
     setLearnedCardMappings(newMappings);
     try { await window.storage.set("fuel_learned_card_mappings", JSON.stringify(newMappings)); } catch (_) {}
     db.saveSetting("learned_card_mappings", JSON.stringify(newMappings)).catch(() => {});
+  };
+
+  // ── Self-learning correction system ────────────────────────────────────────
+  // Trim learned corrections to stay within storage caps
+  const trimLearnedCorrections = (data) => {
+    // Stations: max 200 entries, LRU by lastSeen
+    if (data.stations && Object.keys(data.stations).length > 200) {
+      const sorted = Object.entries(data.stations).sort((a, b) => (a[1].lastSeen || "").localeCompare(b[1].lastSeen || ""));
+      const trimmed = Object.fromEntries(sorted.slice(-200));
+      data.stations = trimmed;
+    }
+    // Station prices: max 100 stations, 5 prices each
+    if (data.stationPrices) {
+      const keys = Object.keys(data.stationPrices);
+      if (keys.length > 100) {
+        const sorted = keys.sort((a, b) => {
+          const ap = data.stationPrices[a], bp = data.stationPrices[b];
+          return (ap.lastSeen || "").localeCompare(bp.lastSeen || "");
+        });
+        sorted.slice(0, sorted.length - 100).forEach(k => delete data.stationPrices[k]);
+      }
+      Object.values(data.stationPrices).forEach(sp => {
+        if (sp.lastPrices && sp.lastPrices.length > 5) sp.lastPrices = sp.lastPrices.slice(-5);
+        if (sp.fuelTypes && sp.fuelTypes.length > 10) sp.fuelTypes = sp.fuelTypes.slice(-10);
+      });
+    }
+    // Digit patterns: max 50, keep highest count
+    if (data.digitPatterns && data.digitPatterns.length > 50) {
+      data.digitPatterns.sort((a, b) => b.count - a.count);
+      data.digitPatterns = data.digitPatterns.slice(0, 50);
+    }
+    // Fuel type corrections: max 100 stations
+    if (data.fuelTypeCorrections && Object.keys(data.fuelTypeCorrections).length > 100) {
+      const keys = Object.keys(data.fuelTypeCorrections);
+      keys.slice(0, keys.length - 100).forEach(k => delete data.fuelTypeCorrections[k]);
+    }
+    return data;
+  };
+
+  // Persist learned corrections to local + cloud storage
+  const persistCorrections = async (newData) => {
+    const trimmed = trimLearnedCorrections(newData);
+    learnedCorrectionsRef.current = trimmed;
+    setLearnedCorrections(trimmed);
+    try { await window.storage.set("fuel_learned_corrections", JSON.stringify(trimmed)); } catch (_) {}
+    db.saveSetting("learned_corrections", JSON.stringify(trimmed)).catch(() => {});
+  };
+
+  // Analyze digit differences between AI-read and user-corrected numeric values
+  const analyzeDigitDiff = (aiValue, userValue, field) => {
+    const a = String(aiValue).replace(/[^0-9]/g, "");
+    const u = String(userValue).replace(/[^0-9]/g, "");
+    if (a.length !== u.length || a === u) return [];
+    const diffs = [];
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== u[i]) diffs.push({ from: a[i], to: u[i], field });
+    }
+    return diffs;
+  };
+
+  // Learn from user corrections — called on submission to compare AI output vs final values
+  const learnFromCorrections = (snapshot, finalReceipt, finalCard, finalForm) => {
+    if (!snapshot) return;
+    const corrections = JSON.parse(JSON.stringify(learnedCorrectionsRef.current));
+    if (!corrections.stations) corrections.stations = {};
+    if (!corrections.stationPrices) corrections.stationPrices = {};
+    if (!corrections.digitPatterns) corrections.digitPatterns = [];
+    if (!corrections.fuelTypeCorrections) corrections.fuelTypeCorrections = {};
+    if (!corrections.stats) corrections.stats = { totalCorrections: 0, correctionsByField: {}, lastUpdated: null };
+    const today = new Date().toISOString().slice(0, 10);
+    let correctionsMade = 0;
+
+    // 1. Station name learning
+    const aiStation = (snapshot.station || "").trim();
+    const userStation = (finalReceipt?.station || "").trim();
+    if (aiStation && userStation && aiStation.toUpperCase() !== userStation.toUpperCase()) {
+      const key = aiStation.toUpperCase();
+      if (corrections.stations[key]) {
+        corrections.stations[key].canonical = userStation;
+        corrections.stations[key].count = (corrections.stations[key].count || 0) + 1;
+        corrections.stations[key].lastSeen = today;
+      } else {
+        corrections.stations[key] = { canonical: userStation, count: 1, lastSeen: today };
+      }
+      corrections.stats.correctionsByField.station = (corrections.stats.correctionsByField.station || 0) + 1;
+      correctionsMade++;
+    }
+
+    // 2. Always record station price baseline (even without corrections)
+    const finalStation = userStation || aiStation;
+    const finalPpl = parseFloat(finalReceipt?.pricePerLitre);
+    const finalFuelType = (finalReceipt?.fuelType || "").trim();
+    if (finalStation && finalPpl > 0) {
+      const sKey = finalStation;
+      if (!corrections.stationPrices[sKey]) corrections.stationPrices[sKey] = { lastPrices: [], fuelTypes: [], lastSeen: today };
+      corrections.stationPrices[sKey].lastPrices.push(finalPpl);
+      corrections.stationPrices[sKey].lastSeen = today;
+      if (finalFuelType && !corrections.stationPrices[sKey].fuelTypes.includes(finalFuelType)) {
+        corrections.stationPrices[sKey].fuelTypes.push(finalFuelType);
+      }
+    }
+
+    // 3. Fuel type corrections per station
+    const aiFuelType = (snapshot.fuelType || "").trim();
+    if (finalStation && aiFuelType && finalFuelType && aiFuelType.toUpperCase() !== finalFuelType.toUpperCase()) {
+      if (!corrections.fuelTypeCorrections[finalStation]) corrections.fuelTypeCorrections[finalStation] = {};
+      corrections.fuelTypeCorrections[finalStation][aiFuelType.toUpperCase()] = finalFuelType;
+      corrections.stats.correctionsByField.fuelType = (corrections.stats.correctionsByField.fuelType || 0) + 1;
+      correctionsMade++;
+    }
+
+    // 4. Digit pattern analysis for numeric fields
+    const numericFields = [
+      { name: "litres", ai: snapshot.litres || snapshot._rawLitres, user: finalReceipt?.litres || finalReceipt?._rawLitres },
+      { name: "cost", ai: snapshot.totalCost || snapshot.fuelCost, user: finalReceipt?.totalCost || finalReceipt?._rawCost },
+      { name: "pricePerLitre", ai: snapshot.pricePerLitre, user: finalReceipt?.pricePerLitre || finalReceipt?._rawPpl },
+    ];
+    numericFields.forEach(({ name, ai, user }) => {
+      if (!ai || !user) return;
+      const aiStr = String(ai), userStr = String(user);
+      if (aiStr === userStr) return;
+      const diffs = analyzeDigitDiff(aiStr, userStr, name);
+      diffs.forEach(diff => {
+        const existing = corrections.digitPatterns.find(p => p.from === diff.from && p.to === diff.to && p.field === diff.field);
+        if (existing) existing.count++;
+        else corrections.digitPatterns.push({ ...diff, count: 1 });
+      });
+      if (diffs.length > 0) {
+        corrections.stats.correctionsByField[name] = (corrections.stats.correctionsByField[name] || 0) + 1;
+        correctionsMade++;
+      }
+    });
+
+    // 5. Date corrections
+    const aiDate = (snapshot.date || "").trim();
+    const userDate = (finalReceipt?.date || "").trim();
+    if (aiDate && userDate && aiDate !== userDate) {
+      corrections.stats.correctionsByField.date = (corrections.stats.correctionsByField.date || 0) + 1;
+      correctionsMade++;
+    }
+
+    // Update stats
+    if (correctionsMade > 0) {
+      corrections.stats.totalCorrections = (corrections.stats.totalCorrections || 0) + correctionsMade;
+      corrections.stats.lastUpdated = new Date().toISOString();
+      console.log(`[Learn] Recorded ${correctionsMade} correction(s) from user edits`);
+    }
+
+    persistCorrections(corrections);
   };
 
   // Learn fleet card ↔ rego association immediately when user edits card data on Steps 2/3
@@ -3170,6 +3464,7 @@ export default function App() {
     setManualCard(false); setManualCardNum(""); setManualCardRego("");
     setSplitMode(false); setSplits([]);
     setPendingExtraEntries(null);
+    setAiScanSnapshot(null);
     setError("");
   };
 
@@ -3197,9 +3492,11 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     const now = new Date();
     const diffMs = Math.abs(now - scannedDate);
     const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
-    if (diffDays > DATE_WINDOW_DAYS) {
-      const direction = scannedDate > now ? "in the future" : `${diffDays} days ago`;
-      showToast(`Date "${normalized.date}" looks unusual (${direction}). Please double-check.`, "warn");
+    const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+    if (scannedDate > todayEnd) {
+      showToast(`Date "${normalized.date}" is in the FUTURE — this is impossible! Please correct the date.`, "error");
+    } else if (diffDays > DATE_WINDOW_DAYS) {
+      showToast(`Date "${normalized.date}" is ${diffDays} days ago — please double-check.`, "warn");
     }
   };
 
@@ -3241,7 +3538,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       setReceiptMime(mime);
       let result = await claudeScan(apiKey, b64, mime, RECEIPT_SCAN_PROMPT);
       if (scanIdRef.current !== currentScanId) return;
-      let normalized = normalizeReceiptData(result);
+      let normalized = normalizeReceiptData(result, learnedCorrectionsRef.current);
 
       // Step 4: Orientation validation — if scan produced very little data and we rotated,
       // the orientation was probably wrong. Try again at 0°.
@@ -3258,7 +3555,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
             if (scanIdRef.current !== currentScanId) return;
             const retryResult = await claudeScan(apiKey, original.b64, original.mime, RECEIPT_SCAN_PROMPT);
             if (scanIdRef.current !== currentScanId) return;
-            const retryNormalized = normalizeReceiptData(retryResult);
+            const retryNormalized = normalizeReceiptData(retryResult, learnedCorrectionsRef.current);
             const retryQuality = [!!retryNormalized.date, !!retryNormalized.station, retryNormalized.litres > 0, (retryNormalized.totalCost > 0 || retryNormalized.fuelCost > 0)].filter(Boolean).length;
             if (retryQuality > dataQuality) {
               console.log(`[Orientation] Original orientation (0°) produced better data (quality=${retryQuality}/4). Using original.`);
@@ -3274,6 +3571,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       }
 
       setReceiptData(normalized);
+      setAiScanSnapshot(JSON.parse(JSON.stringify(normalized)));
       checkScannedDate(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
@@ -3298,8 +3596,9 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       setReceiptMime(mime);
       setReceiptPreview(`data:${mime};base64,${b64}`);
       const result = await claudeScan(apiKey, b64, mime, RECEIPT_SCAN_PROMPT);
-      const normalized = normalizeReceiptData(result);
+      const normalized = normalizeReceiptData(result, learnedCorrectionsRef.current);
       setReceiptData(normalized);
+      setAiScanSnapshot(JSON.parse(JSON.stringify(normalized)));
       checkScannedDate(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
@@ -3315,8 +3614,9 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     setReceiptScanning(true); setError("");
     try {
       const result = await claudeScan(apiKey, receiptB64, receiptMime, RECEIPT_SCAN_PROMPT);
-      const normalized = normalizeReceiptData(result);
+      const normalized = normalizeReceiptData(result, learnedCorrectionsRef.current);
       setReceiptData(normalized);
+      setAiScanSnapshot(JSON.parse(JSON.stringify(normalized)));
       checkScannedDate(normalized);
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
@@ -3355,10 +3655,27 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
   };
 
   const handleSubmit = async () => {
+    // Block submission if date is in the future
+    const dateStr = receiptData?.date || "";
+    if (dateStr) {
+      const dateTs = parseDate(dateStr);
+      if (dateTs) {
+        const entryDate = new Date(dateTs);
+        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        if (entryDate > todayEnd) {
+          setError("Cannot submit: the date is in the future. Receipts can only be from today or earlier. Please correct the date first.");
+          return;
+        }
+      }
+    }
+    // Learn from any corrections the user made (compare AI snapshot vs final values)
+    if (aiScanSnapshot) {
+      learnFromCorrections(aiScanSnapshot, receiptData, cardData, form);
+    }
     setSaving(true);
     // Parse any raw string values that may have been edited in review
     const ppl = parseFloat(receiptData?.pricePerLitre) || null;
-    const date = receiptData?.date || "";
+    const date = dateStr;
     const station = receiptData?.station || "";
     const baseFuelType = receiptData?.fuelType || "";
     const cardNum = cardData?.cardNumber || "";
@@ -5229,6 +5546,33 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Review Oil & Other Claim</div>
             <div style={{ fontSize: 13, color: "#64748b", marginTop: 3 }}>Tap any value to edit before submitting</div>
           </div>
+          {/* Future date blocking popup */}
+          {(() => {
+            if (!receiptData?.date) return null;
+            const ts = parseDate(receiptData.date);
+            if (!ts) return null;
+            const d = new Date(ts); const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+            if (d <= todayEnd) return null;
+            return (
+              <div className="fade-in" style={{
+                background: "#fef2f2", border: "2px solid #dc2626", borderRadius: 10,
+                padding: "16px", marginBottom: 16, textAlign: "center",
+              }}>
+                <div style={{ fontSize: 28, marginBottom: 8 }}>{"\u26D4"}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#dc2626", marginBottom: 6 }}>
+                  Future Date Detected — This is Impossible
+                </div>
+                <div style={{ fontSize: 13, color: "#991b1b", marginBottom: 10, lineHeight: 1.5 }}>
+                  The date "<strong>{receiptData.date}</strong>" is in the future. Receipts can only be from today or earlier.
+                  Please correct the date before submitting.
+                </div>
+                <div style={{ fontSize: 12, color: "#b91c1c", fontWeight: 600 }}>
+                  {"\u2193"} Fix the date in the "Date" field below
+                </div>
+              </div>
+            );
+          })()}
+
           <div style={{ background: "white", border: "1px solid #fde047", borderRadius: 10, overflow: "hidden", marginBottom: 20 }}>
             <div style={{ background: "#fefce8", padding: "8px 14px", fontSize: 11, fontWeight: 700, color: "#854d0e", letterSpacing: "0.04em", textTransform: "uppercase" }}>{"\u26FD"} Oil & Other Claim</div>
             {[
@@ -5249,11 +5593,14 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                 const card = cardData?.cardNumber || otherForm.fleetCard;
                 if (card && card.length >= 10 && cleanRego) learnFleetCardCorrection(card, cleanRego, cardData?._originalCard, cardData?._originalRego);
               }},
-              { label: "Date", val: receiptData?.date || "", set: v => setReceiptData(d => ({...d, date: v})), warn: (() => {
+              { label: "Date", val: receiptData?.date || "", set: v => setReceiptData(d => ({...d, date: v, _futureDateDetected: false, _futureDateCorrected: false})), warn: (() => {
                 if (!receiptData?.date) return null;
                 const ts = parseDate(receiptData.date); if (!ts) return null;
-                const diffDays = Math.round(Math.abs(new Date() - new Date(ts)) / 86400000);
-                if (diffDays > DATE_WINDOW_DAYS) return `Date is ${new Date(ts) > new Date() ? "in the future" : diffDays + " days ago"} — please double-check`;
+                const scannedDate = new Date(ts);
+                const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+                if (scannedDate > todayEnd) return "IMPOSSIBLE: This date is in the future! Receipts cannot have future dates. Please correct this date now.";
+                const diffDays = Math.round(Math.abs(new Date() - scannedDate) / 86400000);
+                if (diffDays > DATE_WINDOW_DAYS) return `Date is ${diffDays} days ago — please double-check`;
                 return null;
               })() },
               { label: "Litres", val: receiptData?._rawLitres || receiptData?.litres?.toString() || "", set: v => setReceiptData(d => ({...d, litres: v, _rawLitres: v})) },
@@ -5359,11 +5706,14 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       { label: "Division", val: form.division, set: v => setForm(f => ({...f, division: v})) },
       { label: "Vehicle type", val: form.vehicleType, set: v => setForm(f => ({...f, vehicleType: v})) },
       { label: isHoursBased(form.vehicleType) ? "Hour Meter" : "Odometer", val: form.odometer, set: v => setForm(f => ({...f, odometer: v})) },
-      { label: "Date", val: receiptData?.date || "", set: v => setReceiptData(d => ({...d, date: v})), warn: (() => {
+      { label: "Date", val: receiptData?.date || "", set: v => setReceiptData(d => ({...d, date: v, _futureDateDetected: false, _futureDateCorrected: false})), warn: (() => {
         if (!receiptData?.date) return null;
         const ts = parseDate(receiptData.date); if (!ts) return null;
-        const diffDays = Math.round(Math.abs(new Date() - new Date(ts)) / 86400000);
-        if (diffDays > DATE_WINDOW_DAYS) return `Date is ${new Date(ts) > new Date() ? "in the future" : diffDays + " days ago"} — please double-check`;
+        const scannedDate = new Date(ts);
+        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        if (scannedDate > todayEnd) return "IMPOSSIBLE: This date is in the future! Receipts cannot have future dates. Please correct this date now.";
+        const diffDays = Math.round(Math.abs(new Date() - scannedDate) / 86400000);
+        if (diffDays > DATE_WINDOW_DAYS) return `Date is ${diffDays} days ago — please double-check`;
         return null;
       })() },
       { label: "Station", val: receiptData?.station || "", set: v => setReceiptData(d => ({...d, station: v})) },
@@ -5517,6 +5867,38 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             {splitMode ? `Split receipt \u2014 ${1 + splits.length} items \u00B7 ` : ""}Tap any value to edit
           </div>
         </div>
+
+        {/* Future date blocking popup */}
+        {(() => {
+          if (!receiptData?.date) return null;
+          const ts = parseDate(receiptData.date);
+          if (!ts) return null;
+          const d = new Date(ts); const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+          if (d <= todayEnd) return null;
+          return (
+            <div className="fade-in" style={{
+              background: "#fef2f2", border: "2px solid #dc2626", borderRadius: 10,
+              padding: "16px", marginBottom: 16, textAlign: "center",
+            }}>
+              <div style={{ fontSize: 28, marginBottom: 8 }}>{"\u26D4"}</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#dc2626", marginBottom: 6 }}>
+                Future Date Detected — This is Impossible
+              </div>
+              <div style={{ fontSize: 13, color: "#991b1b", marginBottom: 10, lineHeight: 1.5 }}>
+                The date "<strong>{receiptData.date}</strong>" is in the future. Receipts can only be from today or earlier.
+                The AI may have misread the date. Please scroll down and correct the date before submitting.
+              </div>
+              {receiptData._originalDate && receiptData._originalDate !== receiptData.date && (
+                <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 8 }}>
+                  AI originally read: "{receiptData._originalDate}" — auto-corrected but still invalid
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: "#b91c1c", fontWeight: 600 }}>
+                {"\u2193"} Fix the date in the "Date" field below
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Unmatched receipt items warning */}
         {hasUnmatched && (
@@ -9551,6 +9933,54 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               onConfirm: async () => { await persistResolved({}); setConfirmAction(null); showToast("Resolved history cleared"); }
             })} style={{ padding: "8px 16px", background: "#f0fdf4", color: "#15803d", border: "1px solid #86efac", borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}>Clear resolved history</button>
           )}
+        </div>
+      </div>
+
+      {/* AI Learning Stats */}
+      <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, marginBottom: 16 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#7c3aed", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>{"\uD83E\uDDE0"} AI Learning</div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>The AI learns from your corrections to improve future scans automatically.</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+          {[
+            { label: "Corrections", value: learnedCorrections.stats?.totalCorrections || 0, color: "#7c3aed" },
+            { label: "Stations Learned", value: Object.keys(learnedCorrections.stations || {}).length, color: "#2563eb" },
+            { label: "Card Mappings", value: Object.keys(learnedCardMappings || {}).length, color: "#16a34a" },
+          ].map(s => (
+            <div key={s.label} style={{ background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 8, padding: "10px 8px", textAlign: "center" }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: s.color }}>{s.value}</div>
+              <div style={{ fontSize: 9, color: "#64748b", marginTop: 2, fontWeight: 500 }}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+        {(() => {
+          const byField = learnedCorrections.stats?.correctionsByField || {};
+          const sorted = Object.entries(byField).sort((a, b) => b[1] - a[1]);
+          if (sorted.length === 0) return <div style={{ fontSize: 11, color: "#94a3b8" }}>No corrections recorded yet. Submit entries and the AI will learn from any edits you make.</div>;
+          return (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 600, color: "#374151", marginBottom: 6 }}>Top correction types:</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {sorted.map(([field, count]) => (
+                  <span key={field} style={{ padding: "3px 8px", borderRadius: 10, fontSize: 10, fontWeight: 600, background: "#f5f3ff", color: "#7c3aed", border: "1px solid #e9d5ff" }}>
+                    {field}: {count}
+                  </span>
+                ))}
+              </div>
+              {learnedCorrections.stats?.lastUpdated && (
+                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 8 }}>Last learned: {new Date(learnedCorrections.stats.lastUpdated).toLocaleDateString("en-AU")}</div>
+              )}
+            </div>
+          );
+        })()}
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button onClick={() => setConfirmAction({
+            message: "Clear all AI learning data? Station corrections, price history, and digit patterns will be lost. The AI will start learning from scratch.",
+            onConfirm: async () => {
+              await persistCorrections({ stations: {}, stationPrices: {}, digitPatterns: [], fuelTypeCorrections: {}, stats: { totalCorrections: 0, correctionsByField: {}, lastUpdated: null } });
+              setConfirmAction(null);
+              showToast("AI learning data cleared");
+            }
+          })} style={{ padding: "8px 16px", background: "#faf5ff", color: "#7c3aed", border: "1px solid #e9d5ff", borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}>Reset AI learning</button>
         </div>
       </div>
 
