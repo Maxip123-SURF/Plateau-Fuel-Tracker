@@ -2799,6 +2799,8 @@ export default function App() {
   const [learnedCardMappings, setLearnedCardMappings] = useState({}); // { "raw_unique8": { correctCard, correctRego, rawCard, rawRego, learnedAt } }
   const [learnedCorrections, setLearnedCorrections] = useState({ stations: {}, stationPrices: {}, digitPatterns: [], fuelTypeCorrections: {}, stats: { totalCorrections: 0, correctionsByField: {}, lastUpdated: null } });
   const [aiScanSnapshot, setAiScanSnapshot] = useState(null); // frozen copy of AI scan output before user edits
+  const [photoDate, setPhotoDate] = useState(null); // extracted EXIF date from receipt photo
+  const [dateCrossValidation, setDateCrossValidation] = useState(null); // cross-validation result
   const learnedCardMappingsRef = useRef(learnedCardMappings);
   const learnedDBRef = useRef(learnedDB);
   const learnedCorrectionsRef = useRef(learnedCorrections);
@@ -3465,6 +3467,8 @@ export default function App() {
     setSplitMode(false); setSplits([]);
     setPendingExtraEntries(null);
     setAiScanSnapshot(null);
+    setPhotoDate(null);
+    setDateCrossValidation(null);
     setError("");
   };
 
@@ -3484,6 +3488,176 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
 
   // Date anomaly check — flag if scanned date is outside 14-day window
   const DATE_WINDOW_DAYS = 14;
+  // ── Date Cross-Validation System ─────────────────────────────────────────
+  // Extract date from photo EXIF data or file.lastModified as ground truth
+  const getPhotoDate = async (file) => {
+    if (!file) return null;
+    // Try to extract EXIF DateTimeOriginal from JPEG
+    try {
+      const buf = await file.slice(0, 128 * 1024).arrayBuffer(); // read first 128KB
+      const view = new DataView(buf);
+      // Check JPEG SOI marker
+      if (view.getUint16(0) === 0xFFD8) {
+        let offset = 2;
+        while (offset < view.byteLength - 4) {
+          const marker = view.getUint16(offset);
+          if (marker === 0xFFE1) { // APP1 (EXIF)
+            const length = view.getUint16(offset + 2);
+            // Check "Exif\0\0" header
+            const exifHeader = String.fromCharCode(view.getUint8(offset + 4), view.getUint8(offset + 5), view.getUint8(offset + 6), view.getUint8(offset + 7));
+            if (exifHeader === "Exif") {
+              const tiffStart = offset + 10;
+              const littleEndian = view.getUint16(tiffStart) === 0x4949;
+              const ifdOffset = view.getUint32(tiffStart + 4, littleEndian);
+              const ifdStart = tiffStart + ifdOffset;
+              const numEntries = view.getUint16(ifdStart, littleEndian);
+              // Search IFD0 for ExifIFD pointer (tag 0x8769)
+              let exifIFDOffset = null;
+              for (let i = 0; i < numEntries && ifdStart + 2 + i * 12 + 12 <= view.byteLength; i++) {
+                const entryOffset = ifdStart + 2 + i * 12;
+                const tag = view.getUint16(entryOffset, littleEndian);
+                if (tag === 0x8769) {
+                  exifIFDOffset = view.getUint32(entryOffset + 8, littleEndian);
+                  break;
+                }
+              }
+              if (exifIFDOffset) {
+                const exifStart = tiffStart + exifIFDOffset;
+                const exifEntries = view.getUint16(exifStart, littleEndian);
+                for (let i = 0; i < exifEntries && exifStart + 2 + i * 12 + 12 <= view.byteLength; i++) {
+                  const entryOffset = exifStart + 2 + i * 12;
+                  const tag = view.getUint16(entryOffset, littleEndian);
+                  // 0x9003 = DateTimeOriginal, 0x9004 = DateTimeDigitized, 0x0132 = DateTime
+                  if (tag === 0x9003 || tag === 0x9004) {
+                    const valOffset = view.getUint32(entryOffset + 8, littleEndian);
+                    const dateBytes = new Uint8Array(buf, tiffStart + valOffset, 19);
+                    const dateStr = String.fromCharCode(...dateBytes); // "YYYY:MM:DD HH:MM:SS"
+                    const [datePart] = dateStr.split(" ");
+                    const [y, m, d] = datePart.split(":").map(Number);
+                    if (y > 2000 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+                      console.log(`[DateCross] EXIF DateTimeOriginal: ${dateStr}`);
+                      return new Date(y, m - 1, d);
+                    }
+                  }
+                }
+              }
+            }
+            offset += 2 + length;
+          } else if ((marker & 0xFF00) === 0xFF00) {
+            offset += 2 + view.getUint16(offset + 2);
+          } else {
+            break;
+          }
+        }
+      }
+    } catch (_) { /* EXIF parsing failed — fall through to lastModified */ }
+    // Fallback: use file's lastModified timestamp (when the photo was saved/taken)
+    if (file.lastModified) {
+      const d = new Date(file.lastModified);
+      console.log(`[DateCross] Using file.lastModified: ${d.toISOString()}`);
+      return d;
+    }
+    return null;
+  };
+
+  // Cross-validate AI-scanned date against multiple independent signals
+  const crossValidateDate = (scannedDateStr, photoDate, rego, currentOdometer) => {
+    const result = { issues: [], suggestedDate: null, confidence: "ok" };
+    const scannedTs = parseDate(scannedDateStr);
+    if (!scannedTs) return result;
+    const scannedDate = new Date(scannedTs);
+
+    // Signal 1: Photo date (EXIF or lastModified)
+    if (photoDate) {
+      const photoDayStart = new Date(photoDate.getFullYear(), photoDate.getMonth(), photoDate.getDate());
+      const scannedDayStart = new Date(scannedDate.getUTCFullYear(), scannedDate.getUTCMonth(), scannedDate.getUTCDate());
+      const gapDays = Math.round((photoDayStart - scannedDayStart) / 86400000);
+      if (gapDays > 2) {
+        result.issues.push({
+          signal: "photo",
+          message: `Photo taken ${photoDate.toLocaleDateString("en-AU")} but receipt date reads ${scannedDateStr} (${gapDays} days earlier)`,
+          detail: "The photo date is much more recent than the scanned date — the AI likely misread a digit",
+        });
+        result.suggestedDate = photoDate;
+      } else if (gapDays < -1) {
+        result.issues.push({
+          signal: "photo",
+          message: `Receipt date ${scannedDateStr} is ${Math.abs(gapDays)} days after the photo was taken`,
+          detail: "The scanned date is after the photo date — likely a digit misread",
+        });
+      }
+    }
+
+    // Signal 2: Submission time (current time — drivers typically submit within 0-2 days)
+    const now = new Date();
+    const nowDayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const scannedDayStart2 = new Date(scannedDate.getUTCFullYear(), scannedDate.getUTCMonth(), scannedDate.getUTCDate());
+    const submissionGap = Math.round((nowDayStart - scannedDayStart2) / 86400000);
+    if (submissionGap > 5) {
+      result.issues.push({
+        signal: "submission",
+        message: `Receipt date is ${submissionGap} days before submission — unusually old`,
+        detail: "Drivers normally submit within 1-2 days. A large gap often means a digit was misread.",
+      });
+      if (!result.suggestedDate) {
+        // Suggest today's date as a fallback if no photo date
+        result.suggestedDate = now;
+      }
+    }
+
+    // Signal 3: Odometer sequence (date should be chronological with odometer)
+    if (rego && currentOdometer) {
+      const r = rego.toUpperCase().replace(/\s+/g, "");
+      const odoNum = parseFloat(currentOdometer);
+      if (r && odoNum > 0) {
+        const regoEntries = entriesRef.current
+          .filter(e => e.registration?.toUpperCase().replace(/\s+/g, "") === r && e.odometer && e.date)
+          .sort((a, b) => (a.odometer || 0) - (b.odometer || 0));
+        // Find the entry with the closest lower odometer
+        const prevEntry = [...regoEntries].reverse().find(e => e.odometer < odoNum);
+        if (prevEntry) {
+          const prevDate = parseDate(prevEntry.date);
+          if (prevDate && scannedTs < prevDate) {
+            const prevDateObj = new Date(prevDate);
+            result.issues.push({
+              signal: "odometer",
+              message: `Odometer is higher than previous entry (${prevEntry.odometer.toLocaleString()}) on ${prevEntry.date}, but scanned date ${scannedDateStr} is earlier`,
+              detail: "The odometer increased but the date went backwards — the date is likely misread",
+            });
+          }
+        }
+        // Check if there's a later entry with lower odometer (date should be before it)
+        const nextEntry = regoEntries.find(e => e.odometer > odoNum);
+        if (nextEntry) {
+          const nextDate = parseDate(nextEntry.date);
+          if (nextDate && scannedTs > nextDate) {
+            result.issues.push({
+              signal: "odometer",
+              message: `Odometer is lower than a later entry (${nextEntry.odometer.toLocaleString()}) on ${nextEntry.date}, but scanned date ${scannedDateStr} is after it`,
+              detail: "The odometer is lower but the date is later — the date may be misread",
+            });
+          }
+        }
+      }
+    }
+
+    // Set confidence level based on number of signals flagging
+    if (result.issues.length >= 2) result.confidence = "high_risk";
+    else if (result.issues.length === 1) result.confidence = "warning";
+
+    // Format suggested date as DD/MM/YYYY if we have one
+    if (result.suggestedDate) {
+      const sd = result.suggestedDate;
+      result.suggestedDateStr = `${String(sd.getDate()).padStart(2, "0")}/${String(sd.getMonth() + 1).padStart(2, "0")}/${sd.getFullYear()}`;
+    }
+
+    if (result.issues.length > 0) {
+      console.log(`[DateCross] ${result.issues.length} issue(s) found for date "${scannedDateStr}":`, result.issues.map(i => i.signal).join(", "));
+    }
+
+    return result;
+  };
+
   const checkScannedDate = (normalized) => {
     if (!normalized?.date) return;
     const scannedTs = parseDate(normalized.date);
@@ -3507,6 +3681,9 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     setReceiptFile(file);
     setReceiptRotation(0);
     setReceiptData(null); setCardData(null);
+    setDateCrossValidation(null);
+    // Extract photo date from EXIF in background
+    getPhotoDate(file).then(pd => setPhotoDate(pd)).catch(() => setPhotoDate(null));
     if (!apiKey) { setError("Add an Anthropic API key in Settings first."); return; }
     const currentScanId = ++scanIdRef.current;
     setReceiptScanning(true); setError("");
@@ -3573,6 +3750,13 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       setReceiptData(normalized);
       setAiScanSnapshot(JSON.parse(JSON.stringify(normalized)));
       checkScannedDate(normalized);
+      // Cross-validate date against photo EXIF + odometer history
+      if (normalized.date) {
+        const rego = form.registration || normalized.vehicleOnCard || "";
+        const odo = form.odometer ? parseInt(form.odometer) : null;
+        const cv = crossValidateDate(normalized.date, photoDate, rego, odo);
+        setDateCrossValidation(cv && cv.issues.length > 0 ? cv : null);
+      }
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
         setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
@@ -3600,6 +3784,12 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       setReceiptData(normalized);
       setAiScanSnapshot(JSON.parse(JSON.stringify(normalized)));
       checkScannedDate(normalized);
+      if (normalized.date) {
+        const rego = form.registration || normalized.vehicleOnCard || "";
+        const odo = form.odometer ? parseInt(form.odometer) : null;
+        const cv = crossValidateDate(normalized.date, photoDate, rego, odo);
+        setDateCrossValidation(cv && cv.issues.length > 0 ? cv : null);
+      }
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
         setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
@@ -3618,6 +3808,12 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       setReceiptData(normalized);
       setAiScanSnapshot(JSON.parse(JSON.stringify(normalized)));
       checkScannedDate(normalized);
+      if (normalized.date) {
+        const rego = form.registration || normalized.vehicleOnCard || "";
+        const odo = form.odometer ? parseInt(form.odometer) : null;
+        const cv = crossValidateDate(normalized.date, photoDate, rego, odo);
+        setDateCrossValidation(cv && cv.issues.length > 0 ? cv : null);
+      }
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
         setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
@@ -5573,6 +5769,43 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             );
           })()}
 
+          {/* Date cross-validation mismatch banner */}
+          {dateCrossValidation?.issues?.length > 0 && (() => {
+            const ts = receiptData?.date ? parseDate(receiptData.date) : null;
+            const d = ts ? new Date(ts) : null;
+            const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+            if (d && d > todayEnd) return null; // future date banner already showing
+            return (
+              <div className="fade-in" style={{
+                background: "#fffbeb", border: "2px solid #f59e0b", borderRadius: 10,
+                padding: "14px 16px", marginBottom: 16,
+              }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#92400e", marginBottom: 6 }}>
+                  {"\u26A0"} Date May Be Misread
+                </div>
+                <div style={{ fontSize: 12, color: "#78350f", marginBottom: 8, lineHeight: 1.5 }}>
+                  {dateCrossValidation.issues.map((iss, i) => <div key={i}>{"\u2022"} {iss.message} <span style={{ fontSize: 10, color: "#a16207" }}>({iss.signal})</span></div>)}
+                </div>
+                {dateCrossValidation.suggestedDateStr && (
+                  <button onClick={() => {
+                    setReceiptData(d => ({...d, date: dateCrossValidation.suggestedDateStr, _futureDateDetected: false, _futureDateCorrected: false}));
+                    setDateCrossValidation(null);
+                  }} style={{
+                    background: "#f59e0b", color: "white", border: "none", borderRadius: 8,
+                    padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer",
+                  }}>
+                    Use Suggested Date: {dateCrossValidation.suggestedDateStr}
+                  </button>
+                )}
+                {!dateCrossValidation.suggestedDateStr && (
+                  <div style={{ fontSize: 12, color: "#b45309", fontWeight: 600 }}>
+                    {"\u2193"} Please verify the date in the field below
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           <div style={{ background: "white", border: "1px solid #fde047", borderRadius: 10, overflow: "hidden", marginBottom: 20 }}>
             <div style={{ background: "#fefce8", padding: "8px 14px", fontSize: 11, fontWeight: 700, color: "#854d0e", letterSpacing: "0.04em", textTransform: "uppercase" }}>{"\u26FD"} Oil & Other Claim</div>
             {[
@@ -5593,12 +5826,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                 const card = cardData?.cardNumber || otherForm.fleetCard;
                 if (card && card.length >= 10 && cleanRego) learnFleetCardCorrection(card, cleanRego, cardData?._originalCard, cardData?._originalRego);
               }},
-              { label: "Date", val: receiptData?.date || "", set: v => setReceiptData(d => ({...d, date: v, _futureDateDetected: false, _futureDateCorrected: false})), warn: (() => {
+              { label: "Date", val: receiptData?.date || "", set: v => { setReceiptData(d => ({...d, date: v, _futureDateDetected: false, _futureDateCorrected: false})); setDateCrossValidation(null); }, warn: (() => {
                 if (!receiptData?.date) return null;
                 const ts = parseDate(receiptData.date); if (!ts) return null;
                 const scannedDate = new Date(ts);
                 const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
                 if (scannedDate > todayEnd) return "IMPOSSIBLE: This date is in the future! Receipts cannot have future dates. Please correct this date now.";
+                if (dateCrossValidation?.issues?.length) return dateCrossValidation.issues.map(i => i.message).join(" | ");
                 const diffDays = Math.round(Math.abs(new Date() - scannedDate) / 86400000);
                 if (diffDays > DATE_WINDOW_DAYS) return `Date is ${diffDays} days ago — please double-check`;
                 return null;
@@ -5706,12 +5940,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       { label: "Division", val: form.division, set: v => setForm(f => ({...f, division: v})) },
       { label: "Vehicle type", val: form.vehicleType, set: v => setForm(f => ({...f, vehicleType: v})) },
       { label: isHoursBased(form.vehicleType) ? "Hour Meter" : "Odometer", val: form.odometer, set: v => setForm(f => ({...f, odometer: v})) },
-      { label: "Date", val: receiptData?.date || "", set: v => setReceiptData(d => ({...d, date: v, _futureDateDetected: false, _futureDateCorrected: false})), warn: (() => {
+      { label: "Date", val: receiptData?.date || "", set: v => { setReceiptData(d => ({...d, date: v, _futureDateDetected: false, _futureDateCorrected: false})); setDateCrossValidation(null); }, warn: (() => {
         if (!receiptData?.date) return null;
         const ts = parseDate(receiptData.date); if (!ts) return null;
         const scannedDate = new Date(ts);
         const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
         if (scannedDate > todayEnd) return "IMPOSSIBLE: This date is in the future! Receipts cannot have future dates. Please correct this date now.";
+        if (dateCrossValidation?.issues?.length) return dateCrossValidation.issues.map(i => i.message).join(" | ");
         const diffDays = Math.round(Math.abs(new Date() - scannedDate) / 86400000);
         if (diffDays > DATE_WINDOW_DAYS) return `Date is ${diffDays} days ago — please double-check`;
         return null;
@@ -5896,6 +6131,43 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               <div style={{ fontSize: 12, color: "#b91c1c", fontWeight: 600 }}>
                 {"\u2193"} Fix the date in the "Date" field below
               </div>
+            </div>
+          );
+        })()}
+
+        {/* Date cross-validation mismatch banner */}
+        {dateCrossValidation?.issues?.length > 0 && (() => {
+          const ts = receiptData?.date ? parseDate(receiptData.date) : null;
+          const d = ts ? new Date(ts) : null;
+          const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+          if (d && d > todayEnd) return null; // future date banner already showing
+          return (
+            <div className="fade-in" style={{
+              background: "#fffbeb", border: "2px solid #f59e0b", borderRadius: 10,
+              padding: "14px 16px", marginBottom: 16,
+            }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#92400e", marginBottom: 6 }}>
+                {"\u26A0"} Date May Be Misread
+              </div>
+              <div style={{ fontSize: 12, color: "#78350f", marginBottom: 8, lineHeight: 1.5 }}>
+                {dateCrossValidation.issues.map((iss, i) => <div key={i}>{"\u2022"} {iss.message} <span style={{ fontSize: 10, color: "#a16207" }}>({iss.signal})</span></div>)}
+              </div>
+              {dateCrossValidation.suggestedDateStr && (
+                <button onClick={() => {
+                  setReceiptData(d => ({...d, date: dateCrossValidation.suggestedDateStr, _futureDateDetected: false, _futureDateCorrected: false}));
+                  setDateCrossValidation(null);
+                }} style={{
+                  background: "#f59e0b", color: "white", border: "none", borderRadius: 8,
+                  padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer",
+                }}>
+                  Use Suggested Date: {dateCrossValidation.suggestedDateStr}
+                </button>
+              )}
+              {!dateCrossValidation.suggestedDateStr && (
+                <div style={{ fontSize: 12, color: "#b45309", fontWeight: 600 }}>
+                  {"\u2193"} Please verify the date in the field below
+                </div>
+              )}
             </div>
           );
         })()}
