@@ -3074,6 +3074,77 @@ export default function App() {
           }).catch(() => {});
         }
 
+        // ── One-time name corrections migration (v1) ──
+        const NAME_MIGRATION_KEY = "fuel_name_migration_v3";
+        let migrationDone = false;
+        try { migrationDone = !!(await window.storage.get(NAME_MIGRATION_KEY))?.value; } catch (_) {}
+        if (!migrationDone) {
+          // Title-case helper: "KYLE OSBORNE" → "Kyle Osborne"
+          const titleCase = (s) => s ? s.replace(/\b\w+/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase()) : s;
+          const isAllCaps = (s) => s && s.length > 2 && s === s.toUpperCase() && /[A-Z]/.test(s);
+          // Merge map: old name → new canonical name
+          const mergeMap = {
+            "nicholas jones": "Nick Jones", "Nicholas Jones": "Nick Jones",
+            "natalie hughes": "Jason Hughes", "Natalie Hughes": "Jason Hughes",
+            "samuel thomas": "Sam Thomas", "Samuel Thomas": "Sam Thomas",
+          };
+          const removeNames = new Set(["Martin Howard", "martin howard"]);
+
+          // Fix entries
+          let entriesChanged = false;
+          const removedEntries = [];
+          localEntries = localEntries.filter(e => {
+            const dn = (e.driverName || "").trim();
+            if (removeNames.has(dn) || removeNames.has(dn.toLowerCase())) { entriesChanged = true; removedEntries.push(e); return false; }
+            return true;
+          }).map(e => {
+            let dn = (e.driverName || "").trim();
+            if (!dn) return e;
+            // Merge names
+            if (mergeMap[dn]) { entriesChanged = true; return { ...e, driverName: mergeMap[dn] }; }
+            const lk = dn.toLowerCase();
+            for (const [k, v] of Object.entries(mergeMap)) { if (k.toLowerCase() === lk) { entriesChanged = true; return { ...e, driverName: v }; } }
+            // Fix ALL-CAPS
+            if (isAllCaps(dn)) { entriesChanged = true; return { ...e, driverName: titleCase(dn) }; }
+            return e;
+          });
+
+          // Fix learnedDB
+          let parsedLearned = lRes?.value ? JSON.parse(lRes.value) : {};
+          let learnedChanged = false;
+          for (const [rego, data] of Object.entries(parsedLearned)) {
+            if (!data.dr) continue;
+            const dr = data.dr.trim();
+            if (removeNames.has(dr) || removeNames.has(dr.toLowerCase())) {
+              parsedLearned[rego] = { ...data, dr: "" };
+              learnedChanged = true;
+            } else if (mergeMap[dr] || Object.entries(mergeMap).find(([k]) => k.toLowerCase() === dr.toLowerCase())) {
+              parsedLearned[rego] = { ...data, dr: mergeMap[dr] || Object.entries(mergeMap).find(([k]) => k.toLowerCase() === dr.toLowerCase())[1] };
+              learnedChanged = true;
+            } else if (isAllCaps(dr)) {
+              parsedLearned[rego] = { ...data, dr: titleCase(dr) };
+              learnedChanged = true;
+            }
+          }
+
+          if (entriesChanged) {
+            try { await window.storage.set("fuel_entries", JSON.stringify(localEntries)); } catch (_) {}
+            // Sync changed entries to Supabase + delete removed ones (await deletes to ensure they complete before next load)
+            if (supabase) {
+              await Promise.all([
+                ...localEntries.map(e => db.saveEntry(e).catch(() => {})),
+                ...removedEntries.filter(e => e.id).map(e => db.deleteEntry(e.id).catch(() => {})),
+              ]);
+            }
+          }
+          if (learnedChanged) {
+            try { await window.storage.set("fuel_learned_db", JSON.stringify(parsedLearned)); } catch (_) {}
+            setLearnedDB(parsedLearned);
+          }
+          try { await window.storage.set(NAME_MIGRATION_KEY, "done"); } catch (_) {}
+          console.log(`[Migration] Name corrections applied — entries: ${entriesChanged}, learned: ${learnedChanged}`);
+        }
+
         setEntries(localEntries);
         setServiceData(localService);
         setResolvedFlags(localResolved);
@@ -10347,12 +10418,27 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 300, overflowY: "auto" }}>
           {Object.entries(learnedDB).sort().map(([rego, data]) => (
             <div key={rego} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 8px", background: "#faf5ff", borderRadius: 6, fontSize: 11 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", flex: 1 }}>
                 <span style={{ fontWeight: 700, color: "#0f172a" }}>{rego}</span>
                 <span style={{ color: "#7c3aed", fontWeight: 500 }}>{data.d}</span>
                 <span style={{ color: "#64748b" }}>{data.t}</span>
                 {data.n && data.n !== data.t && <span style={{ color: "#94a3b8" }}>{data.n}</span>}
-                {data.dr && <span style={{ color: "#94a3b8", fontStyle: "italic" }}>{data.dr}</span>}
+                <input
+                  value={data.dr || ""}
+                  onChange={e => {
+                    const updated = { ...learnedDB, [rego]: { ...data, dr: e.target.value } };
+                    setLearnedDB(updated);
+                  }}
+                  onBlur={e => {
+                    const val = e.target.value.trim();
+                    const updated = { ...learnedDB, [rego]: { ...data, dr: val } };
+                    persistLearned(updated);
+                    if (val !== (data.dr || "").trim()) showToast(`Updated driver for ${rego}`);
+                  }}
+                  placeholder="Driver name"
+                  style={{ color: "#64748b", fontStyle: "italic", fontSize: 11, border: "none", borderBottom: "1px dashed #cbd5e1", background: "transparent", padding: "1px 4px", outline: "none", width: 110, fontFamily: "inherit" }}
+                  onFocus={e => e.target.style.borderBottomColor = "#7c3aed"}
+                />
                 {data.f && <span style={{ color: "#94a3b8" }}>({data.f})</span>}
               </div>
               <button onClick={() => {
