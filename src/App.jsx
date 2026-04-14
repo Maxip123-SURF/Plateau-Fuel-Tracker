@@ -2961,6 +2961,7 @@ export default function App() {
   const [receiptRotation, setReceiptRotation] = useState(0);
   const [receiptFile, setReceiptFile] = useState(null); // original file for re-compression on rotate
   const [receiptData, setReceiptData] = useState(null);
+  const [reviewConfirmed, setReviewConfirmed] = useState(false); // user confirmed suspect scan values
   const [receiptScanning, setReceiptScanning] = useState(false);
 
   const [cardPreview, setCardPreview] = useState(null);
@@ -3725,6 +3726,7 @@ export default function App() {
     setAiScanSnapshot(null);
     setPhotoDate(null);
     setDateCrossValidation(null);
+    setReviewConfirmed(false);
     setError("");
   };
 
@@ -3938,6 +3940,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     setReceiptRotation(0);
     setReceiptData(null); setCardData(null);
     setDateCrossValidation(null);
+    setReviewConfirmed(false);
     // Extract photo date from EXIF in background
     getPhotoDate(file).then(pd => setPhotoDate(pd)).catch(() => setPhotoDate(null));
     if (!apiKey) { setError("Add an Anthropic API key in Settings first."); return; }
@@ -4034,7 +4037,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
   const rotateAndRescan = async (newRotation) => {
     if (!receiptFile || !apiKey) return;
     setReceiptRotation(newRotation);
-    setReceiptScanning(true); setError(""); setReceiptData(null); setCardData(null);
+    setReceiptScanning(true); setError(""); setReceiptData(null); setCardData(null); setReviewConfirmed(false);
     try {
       const { b64, mime } = await compressImage(receiptFile, newRotation);
       setReceiptB64(b64);
@@ -4176,6 +4179,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         hasReceipt: !!receiptB64,
         _aiConfidence: receiptData?.confidence?.overall || null,
         _aiIssues: [...(receiptData?.confidence?.issues || []), ...(receiptData?._mathIssues || [])],
+        _reviewConfirmed: needsReviewConfirmation ? reviewConfirmed : null, // null=clean scan, true=user confirmed a suspect scan
       };
       await persist([...entries, otherEntry], otherEntry);
       if (receiptB64) await saveReceiptImage(otherEntry.id, receiptB64, receiptMime);
@@ -4243,6 +4247,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         hasReceipt: !!receiptB64,
         _aiConfidence: receiptData?.confidence?.overall || null,
         _aiIssues: [...(receiptData?.confidence?.issues || []), ...(receiptData?._mathIssues || [])],
+        _reviewConfirmed: needsReviewConfirmation ? reviewConfirmed : null, // null=clean scan, true=user confirmed a suspect scan
       };
     };
 
@@ -6011,6 +6016,54 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     );
   };
 
+  // ── Review-confirmation gate ──
+  // Show a single "I've checked the numbers" checkbox next to submit
+  // ONLY when the AI scan looks suspect (medium/low confidence or math issues).
+  // Clean scans submit without extra friction.
+  const needsReviewConfirmation = (() => {
+    if (!receiptData) return false;
+    const conf = receiptData.confidence?.overall;
+    if (conf === "medium" || conf === "low") return true;
+    if (receiptData._mathIssues && receiptData._mathIssues.length > 0) return true;
+    if (receiptData._futureDateDetected) return true;
+    return false;
+  })();
+
+  const renderReviewConfirmGate = () => {
+    if (!needsReviewConfirmation) return null;
+    const issues = [
+      ...(receiptData._mathIssues || []),
+      ...(receiptData.confidence?.issues || []),
+    ].filter(Boolean);
+    const conf = receiptData.confidence?.overall || "medium";
+    return (
+      <div style={{
+        background: "#fffbeb", border: "2px solid #fbbf24", borderRadius: 10,
+        padding: "12px 14px", marginBottom: 12,
+      }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#92400e", marginBottom: 6 }}>
+          {"\u26A0"} The scan wasn't fully confident ({conf}) — quick check before submitting
+        </div>
+        {issues.length > 0 && (
+          <ul style={{ margin: "4px 0 10px", paddingLeft: 18, fontSize: 11, color: "#78350f", lineHeight: 1.45 }}>
+            {issues.slice(0, 4).map((msg, i) => (<li key={i}>{msg}</li>))}
+            {issues.length > 4 && <li style={{ color: "#a16207" }}>{`+${issues.length - 4} more — see flags after submit`}</li>}
+          </ul>
+        )}
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", fontSize: 12, color: "#0f172a", fontWeight: 600 }}>
+          <input
+            type="checkbox"
+            checked={reviewConfirmed}
+            onChange={e => setReviewConfirmed(e.target.checked)}
+            style={{ marginTop: 2, width: 16, height: 16, cursor: "pointer", accentColor: "#16a34a" }}
+          />
+          <span>I've checked the numbers above (litres, $/L, total cost, date) and they match the receipt.</span>
+        </label>
+      </div>
+    );
+  };
+  const canSubmitReview = !needsReviewConfirmation || reviewConfirmed;
+
   const renderStep3 = () => {
     // Shared inline edit row style
     const rowStyle = (i, len) => ({
@@ -6145,9 +6198,10 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               </div>
             ))}
           </div>
+          {renderReviewConfirmGate()}
           <div style={{ display: "flex", gap: 10 }}>
             <SecondaryBtn onClick={() => setStep(2)}>{"\u2190"} Back</SecondaryBtn>
-            <div style={{ flex: 1 }}><PrimaryBtn onClick={handleSubmit} loading={saving}>Submit Claim</PrimaryBtn></div>
+            <div style={{ flex: 1 }}><PrimaryBtn onClick={handleSubmit} loading={saving} disabled={!canSubmitReview}>Submit Claim</PrimaryBtn></div>
           </div>
         </div>
       );
@@ -6732,10 +6786,11 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           </div>
         )}
 
+        {renderReviewConfirmGate()}
         <div style={{ display: "flex", gap: 10 }}>
           <SecondaryBtn onClick={() => setStep(2)}>{"\u2190"} Back</SecondaryBtn>
           <div style={{ flex: 1 }}>
-            <PrimaryBtn onClick={handleSubmit} loading={saving}>
+            <PrimaryBtn onClick={handleSubmit} loading={saving} disabled={!canSubmitReview}>
               {splitMode ? `Submit ${1 + splits.length} Entries` : hasUnmatched ? "Submit & Review Extras" : "Submit Entry"}
             </PrimaryBtn>
           </div>
