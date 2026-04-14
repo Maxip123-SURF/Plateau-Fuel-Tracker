@@ -515,7 +515,44 @@ async function compressImage(file, rotation = 0) {
 }
 
 // ─── Receipt + Card scan prompt (combined, multi-line aware) ─────────────
-const RECEIPT_SCAN_PROMPT = `You are an expert fuel receipt scanner. Analyze this image very carefully. It typically contains a fuel receipt AND a fleet card in the same photo.
+// ─── Sydney-anchored "today" helpers ──────────────────────────────────────
+// All "future date" checks MUST use Sydney time, not the device's local clock,
+// because fleet drivers' phones can be set to any timezone and the app itself
+// runs in Sydney (AEST/AEDT). Using device local time caused false "future date"
+// flags early in the morning when device TZ was UTC.
+const sydneyTodayYMD = () => {
+  // Returns {y, m, d} of today's calendar date in Australia/Sydney.
+  const str = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Australia/Sydney",
+    year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date());
+  const [y, m, d] = str.split("-").map(Number);
+  return { y, m, d };
+};
+const sydneyTodayAU = () => {
+  // "DD/MM/YYYY" string in Sydney.
+  const { y, m, d } = sydneyTodayYMD();
+  return `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${y}`;
+};
+// True if DD/MM/YYYY (or similar) string is a day AFTER today in Sydney.
+const isAfterSydneyToday = (dateStr) => {
+  if (!dateStr) return false;
+  const parts = String(dateStr).match(/(\d{1,2})\D+(\d{1,2})\D+(\d{2,4})/);
+  if (!parts) return false;
+  let dd = parseInt(parts[1], 10);
+  let mm = parseInt(parts[2], 10);
+  let yy = parseInt(parts[3], 10);
+  if (yy < 100) yy += 2000;
+  const t = sydneyTodayYMD();
+  if (yy !== t.y) return yy > t.y;
+  if (mm !== t.m) return mm > t.m;
+  return dd > t.d;
+};
+
+// Built fresh per call so "today's date" is never stale even if the tab has
+// been open overnight. (Previously this was a top-level template literal, so
+// the date baked in at module-load time and drifted.)
+const buildReceiptScanPrompt = () => `You are an expert fuel receipt scanner. Analyze this image very carefully. It typically contains a fuel receipt AND a fleet card in the same photo.
 
 ═══════════════════════════════════════════════════
 STEP 1: READ THE RECEIPT TOP-TO-BOTTOM, LINE-BY-LINE
@@ -534,7 +571,7 @@ Usually a line showing the date and transaction/receipt number. The date follows
 - "5/4/26" means 5th April 2026
 Always output the date as DD/MM/YYYY with full 4-digit year.
 
-CRITICAL DATE RULE: The date on a receipt can NEVER be in the future. Receipts record past transactions. Today's date is ${new Date().toLocaleDateString("en-AU", { day: "2-digit", month: "2-digit", year: "numeric" })}. If you read a date that appears to be after today, you have almost certainly misread the day, month, or year. Common misreads:
+CRITICAL DATE RULE: The date on a receipt can NEVER be in the future. Receipts record past transactions. Today's date (Sydney AEST/AEDT) is ${sydneyTodayAU()}. If you read a date that appears to be after today, you have almost certainly misread the day, month, or year. Common misreads:
 - Swapping day and month (e.g. reading "04/10" as 10th April when it's actually 4th October)
 - Wrong year (e.g. reading "25" instead of "26" or vice versa)
 - Misreading a digit (e.g. "1" as "7", "5" as "6")
@@ -814,35 +851,28 @@ function normalizeReceiptData(data, learnedCorrections) {
     }
   }
 
-  // CRITICAL: Auto-correct future dates — receipts can NEVER be in the future
-  if (data.date) {
-    const futureTs = parseDate(data.date);
-    if (futureTs) {
-      const futureDate = new Date(futureTs);
-      const today = new Date();
-      today.setHours(23, 59, 59, 999); // allow today
-      if (futureDate > today) {
-        data._originalDate = data._originalDate || data.date;
-        // Try swapping day/month (common DD/MM vs MM/DD confusion)
-        const parts = data.date.match(/(\d{1,2})\D+(\d{1,2})\D+(\d{2,4})/);
-        if (parts) {
-          const [, p1, p2, p3] = parts;
-          const swapped = `${p2}/${p1}/${p3}`;
-          const swappedTs = parseDate(swapped);
-          if (swappedTs && new Date(swappedTs) <= today) {
-            console.log(`[Date Fix] Future date corrected by swapping day/month: "${data.date}" → "${swapped}"`);
-            data.date = swapped;
-            data._futureDateCorrected = true;
-          } else {
-            // Can't auto-fix — flag it prominently
-            data._futureDateDetected = true;
-            console.warn(`[Date Fix] FUTURE DATE DETECTED: "${data.date}" — cannot auto-correct, user must fix`);
-          }
-        } else {
-          data._futureDateDetected = true;
-          console.warn(`[Date Fix] FUTURE DATE DETECTED: "${data.date}" — cannot auto-correct, user must fix`);
-        }
+  // CRITICAL: Auto-correct future dates — receipts can NEVER be in the future.
+  // Anchored to today in Sydney (Australia/Sydney), not the device's local
+  // clock. Drivers' phones can be set to any timezone and this caused false
+  // "future date" flags around midnight.
+  if (data.date && isAfterSydneyToday(data.date)) {
+    data._originalDate = data._originalDate || data.date;
+    // Try swapping day/month (common DD/MM vs MM/DD confusion)
+    const parts = data.date.match(/(\d{1,2})\D+(\d{1,2})\D+(\d{2,4})/);
+    if (parts) {
+      const [, p1, p2, p3] = parts;
+      const swapped = `${p2}/${p1}/${p3}`;
+      if (!isAfterSydneyToday(swapped)) {
+        console.log(`[Date Fix] Future date corrected by swapping day/month: "${data.date}" → "${swapped}"`);
+        data.date = swapped;
+        data._futureDateCorrected = true;
+      } else {
+        data._futureDateDetected = true;
+        console.warn(`[Date Fix] FUTURE DATE DETECTED: "${data.date}" — cannot auto-correct, user must fix`);
       }
+    } else {
+      data._futureDateDetected = true;
+      console.warn(`[Date Fix] FUTURE DATE DETECTED: "${data.date}" — cannot auto-correct, user must fix`);
     }
   }
 
@@ -2975,8 +3005,7 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
 
   // Date in the future
   if (entry.date) {
-    const entryDate = parseDate(entry.date);
-    if (entryDate && new Date(entryDate) > new Date()) {
+    if (entry.date && isAfterSydneyToday(entry.date)) {
       flags.push({ category: "ai", type: "danger", text: "Future date", detail: `${entry.date} is in the future — likely misread` });
     }
   }
@@ -4050,8 +4079,8 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     const now = new Date();
     const diffMs = Math.abs(now - scannedDate);
     const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
-    const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
-    if (scannedDate > todayEnd) {
+    // Anchor "future" check to Sydney calendar, not device local clock.
+    if (isAfterSydneyToday(normalized.date)) {
       showToast(`Date "${normalized.date}" is in the FUTURE — this is impossible! Please correct the date.`, "error");
     } else if (diffDays > DATE_WINDOW_DAYS) {
       showToast(`Date "${normalized.date}" is ${diffDays} days ago — please double-check.`, "warn");
@@ -4098,7 +4127,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       // Step 3: Full receipt scan on properly oriented image
       setReceiptB64(b64);
       setReceiptMime(mime);
-      let result = await claudeScan(apiKey, b64, mime, RECEIPT_SCAN_PROMPT);
+      let result = await claudeScan(apiKey, b64, mime, buildReceiptScanPrompt());
       if (scanIdRef.current !== currentScanId) return;
       let normalized = normalizeReceiptData(result, learnedCorrectionsRef.current);
 
@@ -4115,7 +4144,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
           try {
             const original = await compressImage(file, 0);
             if (scanIdRef.current !== currentScanId) return;
-            const retryResult = await claudeScan(apiKey, original.b64, original.mime, RECEIPT_SCAN_PROMPT);
+            const retryResult = await claudeScan(apiKey, original.b64, original.mime, buildReceiptScanPrompt());
             if (scanIdRef.current !== currentScanId) return;
             const retryNormalized = normalizeReceiptData(retryResult, learnedCorrectionsRef.current);
             const retryQuality = [!!retryNormalized.date, !!retryNormalized.station, retryNormalized.litres > 0, (retryNormalized.totalCost > 0 || retryNormalized.fuelCost > 0)].filter(Boolean).length;
@@ -4169,7 +4198,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       setReceiptB64(b64);
       setReceiptMime(mime);
       setReceiptPreview(`data:${mime};base64,${b64}`);
-      const result = await claudeScan(apiKey, b64, mime, RECEIPT_SCAN_PROMPT);
+      const result = await claudeScan(apiKey, b64, mime, buildReceiptScanPrompt());
       const normalized = normalizeReceiptData(result, learnedCorrectionsRef.current);
       setReceiptData(normalized);
       setAiScanSnapshot(JSON.parse(JSON.stringify(normalized)));
@@ -4198,7 +4227,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     if (!receiptB64 || !apiKey) return;
     setReceiptScanning(true); setError("");
     try {
-      const result = await claudeScan(apiKey, receiptB64, receiptMime, RECEIPT_SCAN_PROMPT);
+      const result = await claudeScan(apiKey, receiptB64, receiptMime, buildReceiptScanPrompt());
       const normalized = normalizeReceiptData(result, learnedCorrectionsRef.current);
       setReceiptData(normalized);
       setAiScanSnapshot(JSON.parse(JSON.stringify(normalized)));
@@ -4251,18 +4280,11 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
   };
 
   const handleSubmit = async () => {
-    // Block submission if date is in the future
+    // Block submission if date is after today in Sydney
     const dateStr = receiptData?.date || "";
-    if (dateStr) {
-      const dateTs = parseDate(dateStr);
-      if (dateTs) {
-        const entryDate = new Date(dateTs);
-        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
-        if (entryDate > todayEnd) {
-          setError("Cannot submit: the date is in the future. Receipts can only be from today or earlier. Please correct the date first.");
-          return;
-        }
-      }
+    if (dateStr && isAfterSydneyToday(dateStr)) {
+      setError("Cannot submit: the date is in the future. Receipts can only be from today or earlier. Please correct the date first.");
+      return;
     }
     // Learn from any corrections the user made (compare AI snapshot vs final values)
     if (aiScanSnapshot) {
@@ -6218,10 +6240,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           {/* Future date blocking popup */}
           {(() => {
             if (!receiptData?.date) return null;
-            const ts = parseDate(receiptData.date);
-            if (!ts) return null;
-            const d = new Date(ts); const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
-            if (d <= todayEnd) return null;
+            if (!isAfterSydneyToday(receiptData.date)) return null;
             return (
               <div className="fade-in" style={{
                 background: "#fef2f2", border: "2px solid #dc2626", borderRadius: 10,
@@ -6244,10 +6263,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
 
           {/* Date cross-validation mismatch banner */}
           {dateCrossValidation?.issues?.length > 0 && (() => {
-            const ts = receiptData?.date ? parseDate(receiptData.date) : null;
-            const d = ts ? new Date(ts) : null;
-            const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
-            if (d && d > todayEnd) return null; // future date banner already showing
+            if (receiptData?.date && isAfterSydneyToday(receiptData.date)) return null; // future date banner already showing
             return (
               <div className="fade-in" style={{
                 background: "#fffbeb", border: "2px solid #f59e0b", borderRadius: 10,
@@ -6301,11 +6317,10 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
               }},
               { label: "Date", val: receiptData?.date || "", set: v => { setReceiptData(d => ({...d, date: v, _futureDateDetected: false, _futureDateCorrected: false})); setDateCrossValidation(null); }, warn: (() => {
                 if (!receiptData?.date) return null;
+                if (isAfterSydneyToday(receiptData.date)) return "IMPOSSIBLE: This date is in the future! Receipts cannot have future dates. Please correct this date now.";
+                if (dateCrossValidation?.issues?.length) return dateCrossValidation.issues.map(i => i.message).join(" | ");
                 const ts = parseDate(receiptData.date); if (!ts) return null;
                 const scannedDate = new Date(ts);
-                const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
-                if (scannedDate > todayEnd) return "IMPOSSIBLE: This date is in the future! Receipts cannot have future dates. Please correct this date now.";
-                if (dateCrossValidation?.issues?.length) return dateCrossValidation.issues.map(i => i.message).join(" | ");
                 const diffDays = Math.round(Math.abs(new Date() - scannedDate) / 86400000);
                 if (diffDays > DATE_WINDOW_DAYS) return `Date is ${diffDays} days ago — please double-check`;
                 return null;
@@ -6416,11 +6431,10 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       { label: isHoursBased(form.vehicleType) ? "Hour Meter" : "Odometer", val: form.odometer, set: v => setForm(f => ({...f, odometer: v})) },
       { label: "Date", val: receiptData?.date || "", set: v => { setReceiptData(d => ({...d, date: v, _futureDateDetected: false, _futureDateCorrected: false})); setDateCrossValidation(null); }, warn: (() => {
         if (!receiptData?.date) return null;
+        if (isAfterSydneyToday(receiptData.date)) return "IMPOSSIBLE: This date is in the future! Receipts cannot have future dates. Please correct this date now.";
+        if (dateCrossValidation?.issues?.length) return dateCrossValidation.issues.map(i => i.message).join(" | ");
         const ts = parseDate(receiptData.date); if (!ts) return null;
         const scannedDate = new Date(ts);
-        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
-        if (scannedDate > todayEnd) return "IMPOSSIBLE: This date is in the future! Receipts cannot have future dates. Please correct this date now.";
-        if (dateCrossValidation?.issues?.length) return dateCrossValidation.issues.map(i => i.message).join(" | ");
         const diffDays = Math.round(Math.abs(new Date() - scannedDate) / 86400000);
         if (diffDays > DATE_WINDOW_DAYS) return `Date is ${diffDays} days ago — please double-check`;
         return null;
@@ -6580,10 +6594,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         {/* Future date blocking popup */}
         {(() => {
           if (!receiptData?.date) return null;
-          const ts = parseDate(receiptData.date);
-          if (!ts) return null;
-          const d = new Date(ts); const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
-          if (d <= todayEnd) return null;
+          if (!isAfterSydneyToday(receiptData.date)) return null;
           return (
             <div className="fade-in" style={{
               background: "#fef2f2", border: "2px solid #dc2626", borderRadius: 10,
@@ -6611,10 +6622,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
 
         {/* Date cross-validation mismatch banner */}
         {dateCrossValidation?.issues?.length > 0 && (() => {
-          const ts = receiptData?.date ? parseDate(receiptData.date) : null;
-          const d = ts ? new Date(ts) : null;
-          const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
-          if (d && d > todayEnd) return null; // future date banner already showing
+          if (receiptData?.date && isAfterSydneyToday(receiptData.date)) return null; // future date banner already showing
           return (
             <div className="fade-in" style={{
               background: "#fffbeb", border: "2px solid #f59e0b", borderRadius: 10,
