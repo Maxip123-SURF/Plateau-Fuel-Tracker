@@ -1213,15 +1213,17 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMap
   if (!scannedCard && !scannedRego) return { cardNumber: null, vehicleOnCard: null };
 
   // Known card/rego exceptions — real-world cards embossed with a rego that
-  // differs from the actual vehicle. If the scanned rego matches one of these
-  // exceptions exactly, pass it through without fuzzy-correcting it.
+  // differs from the actual vehicle. When the scanned card rego matches an
+  // exception, pass through the card rego AS-IS (it's genuinely what's on the
+  // card) but also surface the actual vehicle rego so the form/entry uses it.
   if (scannedRego) {
     const cleanScannedRego = scannedRego.toUpperCase().replace(/\s+/g, "").replace(/[^A-Z0-9]/g, "");
     const exception = KNOWN_CARD_REGO_EXCEPTIONS.find(e => e.cardRego === cleanScannedRego);
     if (exception) {
       return {
         cardNumber: scannedCard || null,
-        vehicleOnCard: cleanScannedRego,
+        vehicleOnCard: cleanScannedRego, // what the card literally says — e.g. WIA53F
+        actualVehicleRego: exception.vehicleRego, // the real vehicle — e.g. EIA53F
         _corrected: false,
         _confidence: "high",
         _knownException: exception,
@@ -2100,9 +2102,12 @@ function ConfirmDialog({ message, onConfirm, onCancel }) {
 
 // ─── Edit Vehicle Modal ─────────────────────────────────────────────────
 function EditVehicleModal({ rego, currentDivision, currentType, entries: regoEntries, onSave, onClose }) {
+  const [newRego, setNewRego] = useState(rego || "");
   const [div, setDiv] = useState(currentDivision || "");
   const [vtype, setVtype] = useState(currentType || "");
   const divTypes = div && DIVISIONS[div] ? DIVISIONS[div].types : [];
+  const cleanNewRego = newRego.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+  const regoChanged = cleanNewRego && cleanNewRego !== rego;
 
   return (
     <div style={{
@@ -2116,6 +2121,23 @@ function EditVehicleModal({ rego, currentDivision, currentType, entries: regoEnt
         <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>Edit Vehicle</div>
         <div style={{ fontSize: 12, color: "#64748b", marginBottom: 18 }}>
           {rego} {"\u00B7"} {regoEntries} entries {"\u00B7"} currently {currentDivision} / {currentType}
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ display: "block", fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 6 }}>Registration</label>
+          <input
+            value={newRego}
+            onChange={e => setNewRego(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))}
+            placeholder="e.g. EIA53F"
+            style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 14, fontFamily: "inherit", fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", outline: "none", color: "#0f172a" }}
+            onFocus={e => e.target.style.borderColor = "#7c3aed"}
+            onBlur={e => e.target.style.borderColor = "#e2e8f0"}
+          />
+          {regoChanged && (
+            <div style={{ fontSize: 11, color: "#c2410c", marginTop: 6 }}>
+              {"\u26A0\uFE0F"} Renaming will update all {regoEntries} entries from {rego} to {cleanNewRego}
+            </div>
+          )}
         </div>
 
         <div style={{ marginBottom: 14 }}>
@@ -2163,7 +2185,7 @@ function EditVehicleModal({ rego, currentDivision, currentType, entries: regoEnt
         <div style={{ display: "flex", gap: 10 }}>
           <SecondaryBtn onClick={onClose} small>Cancel</SecondaryBtn>
           <div style={{ flex: 1 }}>
-            <PrimaryBtn onClick={() => { if (div && vtype) onSave(rego, div, vtype); }} disabled={!div || !vtype}>
+            <PrimaryBtn onClick={() => { if (div && vtype && cleanNewRego) onSave(rego, div, vtype, cleanNewRego); }} disabled={!div || !vtype || !cleanNewRego}>
               Save Changes
             </PrimaryBtn>
           </div>
@@ -3196,6 +3218,61 @@ export default function App() {
           console.log(`[Migration] Name corrections applied — entries: ${entriesChanged}, learned: ${learnedChanged}`);
         }
 
+        // ── One-time Carlos Carillo card/rego fixup (v1) ──
+        // Carlos's fleet card is embossed WIA53F but his actual vehicle is EIA53F.
+        // Existing entries may have registration=WIA53F; rewrite to EIA53F while keeping cardRego=WIA53F.
+        const CARLOS_MIGRATION_KEY = "fuel_carlos_rego_migration_v1";
+        let carlosMigrationDone = false;
+        try { carlosMigrationDone = !!(await window.storage.get(CARLOS_MIGRATION_KEY))?.value; } catch (_) {}
+        if (!carlosMigrationDone) {
+          let carlosEntriesChanged = false;
+          const changedCarlosEntries = [];
+          localEntries = localEntries.map(e => {
+            const rego = (e.registration || "").toUpperCase().replace(/\s+/g, "");
+            const dn = (e.driverName || "").trim().toLowerCase();
+            const isCarlos = dn === "carlos carillo";
+            // If the entry registration is WIA53F (the card rego), rewrite to EIA53F (actual vehicle)
+            if (rego === "WIA53F" || (isCarlos && rego === "WIA53F")) {
+              carlosEntriesChanged = true;
+              const updated = {
+                ...e,
+                registration: "EIA53F",
+                cardRego: e.cardRego || "WIA53F",
+                fleetCardVehicle: e.fleetCardVehicle || "WIA53F",
+              };
+              changedCarlosEntries.push(updated);
+              return updated;
+            }
+            return e;
+          });
+
+          // Fix learnedDB: if WIA53F is in there as a vehicle, move it to EIA53F
+          let parsedLearnedCarlos = lRes?.value ? JSON.parse(lRes.value) : {};
+          let carlosLearnedChanged = false;
+          if (parsedLearnedCarlos["WIA53F"]) {
+            const wiaData = parsedLearnedCarlos["WIA53F"];
+            const { ["WIA53F"]: _removed, ...restLearned } = parsedLearnedCarlos;
+            parsedLearnedCarlos = {
+              ...restLearned,
+              ["EIA53F"]: { ...(restLearned["EIA53F"] || {}), ...wiaData },
+            };
+            carlosLearnedChanged = true;
+          }
+
+          if (carlosEntriesChanged) {
+            try { await window.storage.set("fuel_entries", JSON.stringify(localEntries)); } catch (_) {}
+            if (supabase) {
+              await Promise.all(changedCarlosEntries.map(e => db.saveEntry(e).catch(() => {})));
+            }
+          }
+          if (carlosLearnedChanged) {
+            try { await window.storage.set("fuel_learned_db", JSON.stringify(parsedLearnedCarlos)); } catch (_) {}
+            setLearnedDB(parsedLearnedCarlos);
+          }
+          try { await window.storage.set(CARLOS_MIGRATION_KEY, "done"); } catch (_) {}
+          console.log(`[Migration] Carlos rego fixup — entries: ${carlosEntriesChanged} (${changedCarlosEntries.length}), learnedDB: ${carlosLearnedChanged}`);
+        }
+
         setEntries(localEntries);
         setServiceData(localService);
         setResolvedFlags(localResolved);
@@ -3881,7 +3958,12 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       }
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
-        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
+        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego, _knownException: matched._knownException, actualVehicleRego: matched.actualVehicleRego });
+        // Known card/rego exception (e.g. Carlos Carillo's WIA53F card for EIA53F vehicle):
+        // auto-fill form registration with the ACTUAL vehicle rego, not the one on the card.
+        if (matched._knownException && matched.actualVehicleRego && !form.registration) {
+          setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
+        }
       }
     } catch (e) {
       if (scanIdRef.current !== currentScanId) return;
@@ -3914,7 +3996,12 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       }
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
-        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
+        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego, _knownException: matched._knownException, actualVehicleRego: matched.actualVehicleRego });
+        // Known card/rego exception (e.g. Carlos Carillo's WIA53F card for EIA53F vehicle):
+        // auto-fill form registration with the ACTUAL vehicle rego, not the one on the card.
+        if (matched._knownException && matched.actualVehicleRego && !form.registration) {
+          setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
+        }
       }
     } catch (e) { setError("Rotate/scan failed \u2014 " + e.message); }
     setReceiptScanning(false);
@@ -3938,7 +4025,12 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       }
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
-        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
+        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego, _knownException: matched._knownException, actualVehicleRego: matched.actualVehicleRego });
+        // Known card/rego exception (e.g. Carlos Carillo's WIA53F card for EIA53F vehicle):
+        // auto-fill form registration with the ACTUAL vehicle rego, not the one on the card.
+        if (matched._knownException && matched.actualVehicleRego && !form.registration) {
+          setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
+        }
       }
     } catch (e) { setError("Re-scan failed \u2014 " + e.message); }
     setReceiptScanning(false);
@@ -4457,19 +4549,36 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     });
   };
 
-  const saveVehicleEdit = async (rego, newDivision, newVehicleType) => {
+  const saveVehicleEdit = async (rego, newDivision, newVehicleType, newRego) => {
+    const finalRego = (newRego || rego).toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const renaming = finalRego && finalRego !== rego;
+    // Guard: block a rename that collides with an existing different vehicle's learnedDB entry
+    if (renaming && learnedDBRef.current[finalRego]) {
+      showToast(`${finalRego} already exists in vehicle database`, "warn");
+      return;
+    }
     const updated = entries.map(e =>
-      e.registration === rego ? { ...e, division: newDivision, vehicleType: newVehicleType } : e
+      e.registration === rego
+        ? { ...e, registration: finalRego, division: newDivision, vehicleType: newVehicleType }
+        : e
     );
     await persist(updated);
-    // Sync updated entries to cloud
-    updated.filter(e => e.registration === rego).forEach(e => db.saveEntry(e).catch(() => {}));
+    // Sync updated entries to cloud (all entries that now have finalRego and were originally rego)
+    updated.filter(e => e.registration === finalRego).forEach(e => db.saveEntry(e).catch(() => {}));
+    // Update learnedDB: move old rego key to new rego key if renaming
     const currentDB = learnedDBRef.current;
     const existing = currentDB[rego] || {};
-    const newLearned = { ...currentDB, [rego]: { ...existing, t: newVehicleType, d: newDivision } };
+    let newLearned;
+    if (renaming) {
+      const { [rego]: _oldKey, ...rest } = currentDB;
+      newLearned = { ...rest, [finalRego]: { ...existing, ...(rest[finalRego] || {}), t: newVehicleType, d: newDivision } };
+    } else {
+      newLearned = { ...currentDB, [rego]: { ...existing, t: newVehicleType, d: newDivision } };
+    }
     await persistLearned(newLearned);
     setEditingVehicle(null);
-    showToast(`${rego} updated to ${newDivision} / ${newVehicleType}`);
+    if (renaming) showToast(`${rego} renamed to ${finalRego} (${newDivision} / ${newVehicleType})`);
+    else showToast(`${rego} updated to ${newDivision} / ${newVehicleType}`);
   };
 
   // ── Render steps ──────────────────────────────────────────────────────────
@@ -5324,8 +5433,11 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       );
       if (result?.cardNumber || result?.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(result.cardNumber, result.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
-        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
-        showToast(matched._corrected ? "Fleet card scanned (auto-corrected)" : "Fleet card scanned");
+        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego, _knownException: matched._knownException, actualVehicleRego: matched.actualVehicleRego });
+        if (matched._knownException && matched.actualVehicleRego && !form.registration) {
+          setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
+        }
+        showToast(matched._corrected ? "Fleet card scanned (auto-corrected)" : matched._knownException ? `Known exception: card shows ${matched.vehicleOnCard}, vehicle is ${matched.actualVehicleRego}` : "Fleet card scanned");
       } else {
         setError("Could not read fleet card from this photo. Try entering manually.");
       }
@@ -5799,8 +5911,12 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             const cleanRego = (manualReceipt.cardRego || "").trim().toUpperCase();
             if (cleanCard || cleanRego) {
               const matched = fuzzyMatchFleetCard(cleanCard, cleanRego, learnedDBRef.current, learnedCardMappingsRef.current);
-              setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego });
-              if (cleanCard && cleanRego) learnFleetCardCorrection(cleanCard, cleanRego);
+              setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego, _knownException: matched._knownException, actualVehicleRego: matched.actualVehicleRego });
+              if (matched._knownException && matched.actualVehicleRego && !form.registration) {
+                setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
+              }
+              // Don't learn exception cards as a correction (they're genuinely different)
+              if (cleanCard && cleanRego && !matched._knownException) learnFleetCardCorrection(cleanCard, cleanRego);
             }
 
             // Set form litres for Vehicle 1
@@ -8245,13 +8361,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                                     <td style={{ padding: "4px 6px", fontWeight: 600, color: "#16a34a" }}>{e.totalCost ? "$" + e.totalCost.toFixed(2) : "\u2014"}</td>
                                     <td style={{ padding: "4px 6px", color: "#374151" }}>{e.odometerReading || "\u2014"}</td>
                                     <td style={{ padding: "4px 6px", display: "flex", gap: 4 }}>
-                                      {e.receiptImage && (
-                                        <button onClick={(ev) => { ev.stopPropagation(); setReceiptViewerEntry(e); }} style={{
+                                      {e.hasReceipt && (
+                                        <button onClick={(ev) => { ev.stopPropagation(); setViewingReceipt(e.id); }} title="View receipt" style={{
                                           padding: "2px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600,
                                           background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe", cursor: "pointer",
-                                        }}>{"\uD83D\uDDBC\uFE0F"}</button>
+                                        }}>{"\uD83D\uDCC4"}</button>
                                       )}
-                                      <button onClick={(ev) => { ev.stopPropagation(); setEditEntry(e); }} style={{
+                                      <button onClick={(ev) => { ev.stopPropagation(); setEditingEntry(e); }} title="Edit entry" style={{
                                         padding: "2px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600,
                                         background: "#fefce8", color: "#854d0e", border: "1px solid #fde047", cursor: "pointer",
                                       }}>{"\u270F\uFE0F"}</button>
@@ -8262,7 +8378,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                             </table>
                           </div>
                         )}
-                        <button onClick={() => { setActiveTab("data"); setSearchTerm(v.rego); }} style={{
+                        <button onClick={() => { setView("data"); setDataSearch(v.rego); setExpandedRego(v.rego); }} style={{
                           padding: "4px 10px", borderRadius: 6, fontSize: 10, fontWeight: 600,
                           background: "white", color: "#2563eb", border: "1px solid #bfdbfe", cursor: "pointer",
                         }}>View full history {"\u2192"}</button>
@@ -10470,7 +10586,26 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           {Object.entries(learnedDB).sort().map(([rego, data]) => (
             <div key={rego} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 8px", background: "#faf5ff", borderRadius: 6, fontSize: 11 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", flex: 1 }}>
-                <span style={{ fontWeight: 700, color: "#0f172a" }}>{rego}</span>
+                <input
+                  defaultValue={rego}
+                  key={`rego-${rego}`}
+                  onBlur={e => {
+                    const newRego = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+                    if (!newRego || newRego === rego) { e.target.value = rego; return; }
+                    if (learnedDB[newRego]) {
+                      showToast(`${newRego} already exists in database`, "warn");
+                      e.target.value = rego;
+                      return;
+                    }
+                    const { [rego]: _moved, ...rest } = learnedDB;
+                    const updated = { ...rest, [newRego]: data };
+                    persistLearned(updated);
+                    showToast(`Renamed ${rego} \u2192 ${newRego}`);
+                  }}
+                  onKeyDown={e => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { e.target.value = rego; e.target.blur(); } }}
+                  style={{ fontWeight: 700, color: "#0f172a", fontSize: 11, border: "none", borderBottom: "1px dashed #cbd5e1", background: "transparent", padding: "1px 4px", outline: "none", width: 80, fontFamily: "inherit", textTransform: "uppercase" }}
+                  onFocus={e => e.target.style.borderBottomColor = "#7c3aed"}
+                />
                 <span style={{ color: "#7c3aed", fontWeight: 500 }}>{data.d}</span>
                 <span style={{ color: "#64748b" }}>{data.t}</span>
                 {data.n && data.n !== data.t && <span style={{ color: "#94a3b8" }}>{data.n}</span>}
