@@ -2408,6 +2408,12 @@ function ManualEntryModal({ rego, division, vehicleType, onSave, onClose }) {
 
 // ─── Edit Entry Modal ────────────────────────────────────────────────────
 function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
+  // Common oil product labels (mirrors OIL_PRODUCTS inside entry form component)
+  const OIL_PRODUCT_LABELS = ["2 Stroke Oil", "Engine Oil", "Chain & Bar Oil", "Hydraulic Oil", "Gear Oil", "Other Oil"];
+  const isOilProductLabel = (equip) => OIL_PRODUCT_LABELS.some(o => o.toLowerCase() === (equip || "").toLowerCase());
+
+  const [entryType, setEntryType] = useState(entry.entryType === "other" ? "other" : "vehicle");
+  const [subType, setSubType] = useState(entry.subType || (isOilProductLabel(entry.equipment) ? "product" : "fuel"));
   const [f, setF] = useState({
     driverName: entry.driverName || "",
     registration: entry.registration || "",
@@ -2420,6 +2426,13 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
     fuelType: entry.fuelType || "",
     division: entry.division || "",
     vehicleType: entry.vehicleType || "",
+    // Oil & Others fields
+    equipment: entry.equipment || "",
+    linkedVehicle: entry.linkedVehicle || "",
+    quantity: entry.quantity?.toString() || "",
+    notes: entry.notes || "",
+    fleetCardNumber: entry.fleetCardNumber || "",
+    cardRego: entry.cardRego || "",
   });
   const set = (k, v) => setF(prev => ({ ...prev, [k]: v }));
   const [showReceipt, setShowReceipt] = useState(!!entry.hasReceipt);
@@ -2499,21 +2512,98 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
           {/* Edit form */}
           <div style={{ flex: "1 1 360px", minWidth: 300, padding: "16px 24px 24px 24px" }}>
 
+        {/* Entry type toggle — lets admin fix entries filed under the wrong category */}
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ display: "block", fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 5 }}>Entry Type</label>
+          <div style={{ display: "flex", gap: 6 }}>
+            {[
+              { k: "vehicle", label: "\uD83D\uDE97 Vehicle" },
+              { k: "other", label: "\uD83D\uDEE2 Oil & Others" },
+            ].map(opt => {
+              const sel = entryType === opt.k;
+              return (
+                <button key={opt.k} onClick={() => setEntryType(opt.k)} style={{
+                  flex: 1, padding: "8px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+                  fontFamily: "inherit", fontWeight: sel ? 700 : 500,
+                  background: sel ? "#eff6ff" : "white", color: sel ? "#1d4ed8" : "#64748b",
+                  border: `1.5px solid ${sel ? "#93c5fd" : "#e2e8f0"}`,
+                }}>{opt.label}</button>
+              );
+            })}
+          </div>
+          {entryType !== (entry.entryType === "other" ? "other" : "vehicle") && (
+            <div style={{ marginTop: 6, fontSize: 11, color: "#b45309", background: "#fefce8", border: "1px solid #fde68a", borderRadius: 6, padding: "6px 8px" }}>
+              {"\u26A0 Converting this entry to "}<b>{entryType === "other" ? "Oil & Others" : "Vehicle"}</b>{". Some fields will be cleared on save."}
+            </div>
+          )}
+        </div>
+
         <FieldInput label="Driver Name" value={f.driverName} onChange={v => set("driverName", v)} placeholder="Driver name" required />
-        <FieldInput label="Registration" value={f.registration} onChange={v => set("registration", v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))} placeholder="e.g. EIA53F" required />
-        <FieldInput label="Date" value={f.date} onChange={v => set("date", v)} placeholder="DD/MM/YYYY" required />
-        <FieldInput label={isHoursBased(entry.vehicleType) ? "Hour Meter" : "Odometer"} value={f.odometer} onChange={v => set("odometer", v)} placeholder={isHoursBased(entry.vehicleType) ? "e.g. 4500" : "e.g. 154597"} type="number" required />
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <FieldInput label="Litres" value={f.litres} onChange={v => set("litres", v)} placeholder="e.g. 65.86" type="number" />
-          <FieldInput label="Price per Litre ($)" value={f.pricePerLitre} onChange={v => set("pricePerLitre", v)} placeholder="e.g. 2.259" type="number" />
-        </div>
-        <FieldInput label="Total Fuel Cost ($)" value={f.totalCost} onChange={v => set("totalCost", v)} placeholder="e.g. 148.78" type="number" />
+        {entryType === "vehicle" ? (
+          <>
+            <FieldInput label="Registration" value={f.registration} onChange={v => set("registration", v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))} placeholder="e.g. EIA53F" required />
+            <FieldInput label="Date" value={f.date} onChange={v => set("date", v)} placeholder="DD/MM/YYYY" required />
+            <FieldInput label={isHoursBased(f.vehicleType) ? "Hour Meter" : "Odometer"} value={f.odometer} onChange={v => set("odometer", v)} placeholder={isHoursBased(f.vehicleType) ? "e.g. 4500" : "e.g. 154597"} type="number" required />
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <FieldInput label="Station" value={f.station} onChange={v => set("station", v)} placeholder="e.g. Ampol Brookvale" />
-          <FieldInput label="Fuel Type" value={f.fuelType} onChange={v => set("fuelType", v)} placeholder="e.g. Diesel" />
-        </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <FieldInput label="Litres" value={f.litres} onChange={v => set("litres", v)} placeholder="e.g. 65.86" type="number" />
+              <FieldInput label="Price per Litre ($)" value={f.pricePerLitre} onChange={v => set("pricePerLitre", v)} placeholder="e.g. 2.259" type="number" />
+            </div>
+            <FieldInput label="Total Fuel Cost ($)" value={f.totalCost} onChange={v => set("totalCost", v)} placeholder="e.g. 148.78" type="number" />
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <FieldInput label="Station" value={f.station} onChange={v => set("station", v)} placeholder="e.g. Ampol Brookvale" />
+              <FieldInput label="Fuel Type" value={f.fuelType} onChange={v => set("fuelType", v)} placeholder="e.g. Diesel" />
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Oil & Others entry fields */}
+            <FieldInput label="Date" value={f.date} onChange={v => set("date", v)} placeholder="DD/MM/YYYY" required />
+
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: "block", fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 5 }}>Category</label>
+              <div style={{ display: "flex", gap: 6 }}>
+                {[
+                  { k: "fuel", label: "\u26FD Fuel (Jerry Can, Chainsaw, etc.)" },
+                  { k: "product", label: "\uD83D\uDEE2 Oil / Product" },
+                ].map(opt => {
+                  const sel = subType === opt.k;
+                  return (
+                    <button key={opt.k} onClick={() => setSubType(opt.k)} style={{
+                      flex: 1, padding: "7px 8px", borderRadius: 8, fontSize: 11, cursor: "pointer",
+                      fontFamily: "inherit", fontWeight: sel ? 700 : 500,
+                      background: sel ? "#f0fdf4" : "white", color: sel ? "#15803d" : "#64748b",
+                      border: `1.5px solid ${sel ? "#86efac" : "#e2e8f0"}`,
+                    }}>{opt.label}</button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <FieldInput label="Equipment / Item" value={f.equipment} onChange={v => set("equipment", v)} placeholder={subType === "product" ? "e.g. Engine Oil" : "e.g. Jerry Can"} required />
+            <FieldInput label="Linked Vehicle Rego (optional)" value={f.linkedVehicle} onChange={v => set("linkedVehicle", v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))} placeholder="e.g. EIA53F" />
+
+            {subType === "fuel" ? (
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <FieldInput label="Litres" value={f.litres} onChange={v => set("litres", v)} placeholder="e.g. 5.00" type="number" />
+                  <FieldInput label="Price per Litre ($)" value={f.pricePerLitre} onChange={v => set("pricePerLitre", v)} placeholder="e.g. 2.259" type="number" />
+                </div>
+                <FieldInput label="Total Cost ($)" value={f.totalCost} onChange={v => set("totalCost", v)} placeholder="e.g. 11.30" type="number" />
+              </>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <FieldInput label="Quantity" value={f.quantity} onChange={v => set("quantity", v)} placeholder="e.g. 2" type="number" />
+                <FieldInput label="Total Cost ($)" value={f.totalCost} onChange={v => set("totalCost", v)} placeholder="e.g. 19.98" type="number" />
+              </div>
+            )}
+
+            <FieldInput label="Station" value={f.station} onChange={v => set("station", v)} placeholder="e.g. BP Marsden Park" />
+            <FieldInput label="Notes" value={f.notes} onChange={v => set("notes", v)} placeholder="Description / context" />
+          </>
+        )}
 
         {/* Division */}
         <div style={{ marginBottom: 14 }}>
@@ -2534,8 +2624,8 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
           </div>
         </div>
 
-        {/* Vehicle type */}
-        {f.division && (
+        {/* Vehicle type — only for vehicle entries */}
+        {entryType === "vehicle" && f.division && (
           <div style={{ marginBottom: 14 }}>
             <label style={{ display: "block", fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 5 }}>Vehicle Type</label>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
@@ -2563,20 +2653,56 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
           }}>Delete</button>
           <div style={{ flex: 1 }}>
             <PrimaryBtn onClick={() => {
-              onSave({
-                ...entry,
-                driverName: f.driverName.trim(),
-                registration: f.registration.trim().toUpperCase(),
-                date: f.date.trim(),
-                odometer: parseFloat(f.odometer) || null,
-                litres: parseFloat(f.litres) || null,
-                pricePerLitre: parseFloat(f.pricePerLitre) || null,
-                totalCost: parseFloat(f.totalCost) || null,
-                station: f.station.trim(),
-                fuelType: f.fuelType.trim(),
-                division: f.division,
-                vehicleType: f.vehicleType,
-              });
+              if (entryType === "other") {
+                // Build "Oil & Others" entry — strip vehicle-only fields
+                const isProduct = subType === "product";
+                onSave({
+                  ...entry,
+                  entryType: "other",
+                  subType: isProduct ? "product" : "fuel",
+                  driverName: f.driverName.trim(),
+                  date: f.date.trim(),
+                  equipment: f.equipment.trim(),
+                  linkedVehicle: f.linkedVehicle.trim().toUpperCase() || null,
+                  station: f.station.trim(),
+                  notes: f.notes.trim(),
+                  division: f.division || "Tree",
+                  // Product = quantity+cost; Fuel = litres+ppl+cost
+                  litres: isProduct ? null : (parseFloat(f.litres) || null),
+                  pricePerLitre: isProduct ? null : (parseFloat(f.pricePerLitre) || null),
+                  quantity: isProduct ? (parseInt(f.quantity) || null) : null,
+                  totalCost: parseFloat(f.totalCost) || null,
+                  fuelType: f.equipment.trim(),
+                  fleetCardNumber: f.fleetCardNumber || entry.fleetCardNumber || "",
+                  cardRego: f.cardRego || entry.cardRego || "",
+                  // Clear vehicle-only fields
+                  registration: null,
+                  vehicleType: null,
+                  odometer: null,
+                });
+              } else {
+                // Vehicle entry — strip other-only fields
+                onSave({
+                  ...entry,
+                  entryType: null, // normal vehicle entry
+                  subType: null,
+                  driverName: f.driverName.trim(),
+                  registration: f.registration.trim().toUpperCase(),
+                  date: f.date.trim(),
+                  odometer: parseFloat(f.odometer) || null,
+                  litres: parseFloat(f.litres) || null,
+                  pricePerLitre: parseFloat(f.pricePerLitre) || null,
+                  totalCost: parseFloat(f.totalCost) || null,
+                  station: f.station.trim(),
+                  fuelType: f.fuelType.trim(),
+                  division: f.division,
+                  vehicleType: f.vehicleType,
+                  // Clear other-only fields
+                  equipment: null,
+                  linkedVehicle: null,
+                  quantity: null,
+                });
+              }
             }}>Save Changes</PrimaryBtn>
           </div>
         </div>
