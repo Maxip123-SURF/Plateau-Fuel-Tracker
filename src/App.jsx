@@ -9359,8 +9359,17 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             const key = `${group.div}|||${group.vt}`;
             const isCollapsed = collapsedFleetGroups[key];
             const dc = DIV_COLORS[group.div] || { bg: "#f8fafc", border: "#e2e8f0", text: "#374151" };
-            const groupFlags = group.vehicles.reduce((s, v) => s + v.flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn")).length, 0);
-            const groupOverdue = group.vehicles.filter(v => v.svcStatus === "overdue").length;
+            // Only count OPEN flags — skip anything already resolved by admin
+            const groupFlags = group.vehicles.reduce((s, v) => s + v.flags.filter(f =>
+              f.category === "ops" && (f.type === "danger" || f.type === "warn") && !resolvedFlags[flagId(f)]
+            ).length, 0);
+            // Service overdue badge also hides when its flag(s) are resolved
+            const groupOverdue = group.vehicles.filter(v => {
+              if (v.svcStatus !== "overdue") return false;
+              const overdueFlags = v.flags.filter(f => f.text === "SERVICE OVERDUE");
+              if (overdueFlags.length === 0) return true;
+              return overdueFlags.some(f => !resolvedFlags[flagId(f)]);
+            }).length;
 
             return (
               <div key={key} style={{ marginBottom: 10 }}>
@@ -9447,13 +9456,18 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                                   </span>
                                 </td>
                                 <td>
-                                  {v.flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn")).length > 0 ? (
-                                    <span className="flag-badge flag-danger" style={{ fontSize: 9, cursor: "pointer" }} onClick={(ev) => { ev.stopPropagation(); setShowFlags(true); }}>
-                                      {v.flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn")).length}
-                                    </span>
-                                  ) : (
-                                    <span style={{ color: "#86efac", fontSize: 12 }}>{"\u2713"}</span>
-                                  )}
+                                  {(() => {
+                                    const openOps = v.flags.filter(f =>
+                                      f.category === "ops" && (f.type === "danger" || f.type === "warn") && !resolvedFlags[flagId(f)]
+                                    );
+                                    return openOps.length > 0 ? (
+                                      <span className="flag-badge flag-danger" style={{ fontSize: 9, cursor: "pointer" }} onClick={(ev) => { ev.stopPropagation(); setShowFlags(true); }}>
+                                        {openOps.length}
+                                      </span>
+                                    ) : (
+                                      <span style={{ color: "#86efac", fontSize: 12 }}>{"\u2713"}</span>
+                                    );
+                                  })()}
                                 </td>
                               </tr>
                               {isRowExpanded && (
