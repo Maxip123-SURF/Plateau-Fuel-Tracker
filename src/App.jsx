@@ -62,6 +62,11 @@ const db = {
         hasReceipt: meta.hasReceipt || false,
         _aiConfidence: meta._aiConfidence || null,
         _aiIssues: meta._aiIssues || [],
+        _cardConfidence: meta._cardConfidence || null,
+        _cardCorrected: meta._cardCorrected || false,
+        _cardConfusable: meta._cardConfusable || null,
+        _cardOriginalCard: meta._cardOriginalCard || null,
+        _cardOriginalRego: meta._cardOriginalRego || null,
         receiptUrl: meta.receiptUrl || null,
         linkedVehicle: meta.linkedVehicle || null,
       };
@@ -103,6 +108,11 @@ const db = {
         hasReceipt: entry.hasReceipt || false,
         _aiConfidence: entry._aiConfidence || null,
         _aiIssues: entry._aiIssues || [],
+        _cardConfidence: entry._cardConfidence || null,
+        _cardCorrected: entry._cardCorrected || false,
+        _cardConfusable: entry._cardConfusable || null,
+        _cardOriginalCard: entry._cardOriginalCard || null,
+        _cardOriginalRego: entry._cardOriginalRego || null,
         receiptUrl: entry.receiptUrl || null,
         linkedVehicle: entry.linkedVehicle || null,
       },
@@ -2962,11 +2972,25 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
   // These appear in the DATA section for manual review/correction
   // ══════════════════════════════════════════════════════════════════════════
 
-  // AI Confidence Flags
-  if (entry._aiConfidence === "low") {
-    flags.push({ category: "ai", type: "danger", text: "AI low confidence", detail: `The scanner was unsure about this receipt. Issues: ${(entry._aiIssues || []).join(", ") || "unclear image"}` });
-  } else if (entry._aiConfidence === "medium") {
-    flags.push({ category: "ai", type: "warn", text: "AI uncertain", detail: `Some values may be inaccurate. Issues: ${(entry._aiIssues || []).join(", ") || "partially unclear"}` });
+  // AI Confidence Flags — roll fleet card uncertainty into the detail too
+  // (embossed cards are a common AI misread, so treat them the same as
+  // receipt-level uncertainty)
+  const cardIssues = [];
+  if (entry._cardConfidence === "low") {
+    cardIssues.push(`fleet card unclear (AI read "${entry._cardOriginalCard || "?"}"${entry._cardOriginalRego ? `, rego "${entry._cardOriginalRego}"` : ""})`);
+  }
+  if (Array.isArray(entry._cardConfusable) && entry._cardConfusable.length > 0) {
+    cardIssues.push(`similar regos detected: ${entry._cardConfusable.join(", ")}`);
+  }
+  const allIssues = [...(entry._aiIssues || []), ...cardIssues];
+
+  if (entry._aiConfidence === "low" || entry._cardConfidence === "low") {
+    const why = entry._aiConfidence === "low"
+      ? "The scanner was unsure about this receipt."
+      : "The scanner could not clearly read the fleet card.";
+    flags.push({ category: "ai", type: "danger", text: "AI low confidence", detail: `${why} Issues: ${allIssues.join(", ") || "unclear image"}` });
+  } else if (entry._aiConfidence === "medium" || cardIssues.length > 0) {
+    flags.push({ category: "ai", type: "warn", text: "AI uncertain", detail: `Some values may be inaccurate. Issues: ${allIssues.join(", ") || "partially unclear"}` });
   }
 
   // Registration looks suspicious
@@ -4343,6 +4367,11 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         hasReceipt: !!receiptB64,
         _aiConfidence: receiptData?.confidence?.overall || null,
         _aiIssues: [...(receiptData?.confidence?.issues || []), ...(receiptData?._mathIssues || [])],
+        _cardConfidence: cardData?._confidence || null,
+        _cardCorrected: !!cardData?._corrected,
+        _cardConfusable: cardData?._confusableRegos || null,
+        _cardOriginalCard: cardData?._originalCard || null,
+        _cardOriginalRego: cardData?._originalRego || null,
         _reviewConfirmed: needsReviewConfirmation ? reviewConfirmed : null, // null=clean scan, true=user confirmed a suspect scan
       };
       await persist([...entries, otherEntry], otherEntry);
@@ -4411,6 +4440,11 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         hasReceipt: !!receiptB64,
         _aiConfidence: receiptData?.confidence?.overall || null,
         _aiIssues: [...(receiptData?.confidence?.issues || []), ...(receiptData?._mathIssues || [])],
+        _cardConfidence: cardData?._confidence || null,
+        _cardCorrected: !!cardData?._corrected,
+        _cardConfusable: cardData?._confusableRegos || null,
+        _cardOriginalCard: cardData?._originalCard || null,
+        _cardOriginalRego: cardData?._originalRego || null,
         _reviewConfirmed: needsReviewConfirmation ? reviewConfirmed : null, // null=clean scan, true=user confirmed a suspect scan
       };
     };
@@ -6977,6 +7011,11 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         hasReceipt: !!receiptB64,
         _aiConfidence: receiptData?.confidence?.overall || null,
         _aiIssues: ["Auto-detected extra fuel line from receipt"],
+        _cardConfidence: cardData?._confidence || null,
+        _cardCorrected: !!cardData?._corrected,
+        _cardConfusable: cardData?._confusableRegos || null,
+        _cardOriginalCard: cardData?._originalCard || null,
+        _cardOriginalRego: cardData?._originalRego || null,
       };
       const newEntries = insertChronological(entries, entry);
       await persist(newEntries, entry);
