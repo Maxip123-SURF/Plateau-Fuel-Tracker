@@ -63,10 +63,13 @@ const db = {
         _aiConfidence: meta._aiConfidence || null,
         _aiIssues: meta._aiIssues || [],
         _cardConfidence: meta._cardConfidence || null,
+        _cardMatchConfidence: meta._cardMatchConfidence || null,
         _cardCorrected: meta._cardCorrected || false,
         _cardConfusable: meta._cardConfusable || null,
         _cardOriginalCard: meta._cardOriginalCard || null,
         _cardOriginalRego: meta._cardOriginalRego || null,
+        _cardRawRead: meta._cardRawRead || null,
+        _cardAiIssues: meta._cardAiIssues || null,
         receiptUrl: meta.receiptUrl || null,
         linkedVehicle: meta.linkedVehicle || null,
       };
@@ -109,10 +112,13 @@ const db = {
         _aiConfidence: entry._aiConfidence || null,
         _aiIssues: entry._aiIssues || [],
         _cardConfidence: entry._cardConfidence || null,
+        _cardMatchConfidence: entry._cardMatchConfidence || null,
         _cardCorrected: entry._cardCorrected || false,
         _cardConfusable: entry._cardConfusable || null,
         _cardOriginalCard: entry._cardOriginalCard || null,
         _cardOriginalRego: entry._cardOriginalRego || null,
+        _cardRawRead: entry._cardRawRead || null,
+        _cardAiIssues: entry._cardAiIssues || null,
         receiptUrl: entry.receiptUrl || null,
         linkedVehicle: entry.linkedVehicle || null,
       },
@@ -603,6 +609,17 @@ The price per litre (PPL) is a SMALL NUMBER (between 1.40 and 4.00 dollars). It 
 
 HARD RULE: If the value you are about to report as pricePerLitre is OUTSIDE the range $1.40–$4.00 (or 140–400 if printed in cents), you have picked the wrong number. STOP. Re-read the receipt. Find the small number next to the fuel name that IS in this range — THAT is the PPL. The larger number you were about to pick is almost certainly the line subtotal or the grand total.
 
+CENTS vs DOLLARS DISAMBIGUATION:
+- If PPL is printed as "189.9" or "232.9" (3 digits before decimal, decimal present), it's CENTS — divide by 100. Return 1.899 or 2.329.
+- If PPL is printed as "1.899" or "2.329" (1 digit before decimal), it's DOLLARS — return as-is.
+- A 4-digit integer with no decimal (e.g. "1899") on a PPL line is ALMOST ALWAYS cents — return 1.899.
+- NEVER return a PPL above 4.00 or below 1.40.
+
+POSITIONAL COLUMN ORDER (reinforcement):
+On a single fuel line, the PHYSICAL left-to-right order is always:
+  [FUEL NAME] ... [LITRES] ... [PPL] ... [SUBTOTAL]
+The SUBTOTAL is ALWAYS the rightmost (and largest) number on the line. The PPL is ALWAYS smaller than the subtotal. If you see three numbers on one line and assign the largest to pricePerLitre, you have swapped columns — swap them back.
+
 CROSS-CHECK BEFORE RETURNING: For every fuel line, verify litres × pricePerLitre ≈ subtotal_cost. If the product is >20% off the printed subtotal, you have misread one of the three numbers — re-read them before returning.
 
 If a fuel entry spans 2 lines, the format is often:
@@ -668,6 +685,12 @@ RECEIPT LINE FORMAT — TWO-LINE PRODUCTS:
   "1 ULT. DIESEL        383.01 B"      ← Diesel costs $383.01
   "Pump: 22  128.57 Litre  2.979$/L"   ← Diesel is 128.57L at $2.979/L
 
+RECEIPT LINE FORMAT — THREE-LINE PUMP BLOCKS (common on Caltex/Ampol/7-Eleven):
+  "Pump 05"                            ← pump identifier line (skip — no values)
+  "DIESEL         45.23L @ 2.829"      ← litres 45.23, PPL 2.829
+  "                      $127.96"      ← subtotal $127.96
+The "L" suffix after a number DEFINITIVELY marks LITRES. The "@" or "$/L" DEFINITIVELY marks PPL. The "$" prefix on the rightmost number DEFINITIVELY marks SUBTOTAL. Use these markers to disambiguate columns.
+
 Each product has its OWN cost, litres, and price-per-litre. Do NOT merge them.
 
 NON-FUEL PURCHASES:
@@ -731,6 +754,52 @@ RULES
 - "cardNumber" null unless PHYSICAL CARD with 16 digits is visible.
 - CONFIDENCE: "high" = clear image, all values readable, math checks out. "medium" = some blurry/uncertain digits or used reverse calculation to resolve ambiguity. "low" = very blurry or unreadable. Always list specific digit uncertainties in issues.
 - REMEMBER: READ FIRST, calculate second. The receipt's printed numbers are the primary source of truth. Reverse calculation is your backup tool for resolving uncertain digits — not a replacement for careful reading.`;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fleet card scan prompt — single source of truth for both the combined
+// receipt+card flow and the card-only scan flow. Keeping this in one place
+// prevents the two call sites from drifting out of sync.
+//
+// The prompt asks the AI to:
+//  1. Report the raw digits it saw (so we can track what it actually read
+//     even after our post-processing corrects it).
+//  2. Self-report a confidence level based on how clearly it could read the
+//     embossed digits — this drives the "Fleet card unclear" admin flag,
+//     which is independent of whether the matcher could later map the scan
+//     to a known card in the database.
+// ─────────────────────────────────────────────────────────────────────────────
+const buildCardScanPrompt = () => `Extract fleet card details from this image. This should show a Shell FleetCard — an orange/red plastic card with an embossed (raised) 16-digit number.
+
+CARD LAYOUT (top to bottom):
+Line 1: "FleetCard" logo
+Line 2: 16-digit card number, EMBOSSED (raised ridges) — always starts with "7034"
+Line 3: Cardholder surname + vehicle model description (e.g. "WHITE NNR-451", "SMITH HILUX") — this is NOT the registration
+Line 4: VEHICLE REGISTRATION — short 5-7 character alphanumeric code (e.g. "DF25LB", "EIA53F", "BC12AB")
+Line 5: Expiry date (e.g. "EXP 11/30")
+
+CRITICAL RULES:
+- The 16-digit card number is EMBOSSED. Embossed digits create raised ridges that cast shadows under flash photography. Common misreads from shadows: 8↔6, 8↔3, 1↔7, 0↔8, 5↔6, 5↔3, 9↔0. Look CAREFULLY at each digit — the ridge shape, not the shadow, is the true digit.
+- The card number ALWAYS starts with "7034". If you read a first four digits that aren't "7034", you have misread the opening digits — re-read.
+- The registration is on the line BELOW the surname. Do NOT return the surname line as the rego.
+- If there is also a receipt visible in the photo and it says "FLEETCARD" in text, that is just a transaction label — it is NOT the card number. The card number must come from the PHYSICAL plastic card with 16 embossed digits.
+- If you cannot clearly see all 16 embossed digits, return null for cardNumber rather than guessing.
+- If the angle/glare/blur makes ANY digit ambiguous, set confidence.overall to "medium" or "low" and list the specific ambiguity in confidence.issues.
+
+Return ONLY valid JSON (no other text):
+{
+  "cardNumber": "16 digit card number or null",
+  "vehicleOnCard": "registration from the line below the surname, or null",
+  "rawCardRead": "the exact digits you read before any guessing — same as cardNumber if confident, or what you best-effort deciphered",
+  "confidence": {
+    "overall": "high | medium | low",
+    "issues": ["list any specific digits or characters that were unclear, e.g. '3rd digit could be 8 or 6', 'rego partially obscured'"]
+  }
+}
+
+CONFIDENCE GUIDE:
+- "high" — card is in focus, no glare, every digit unambiguous.
+- "medium" — one or two digits required careful inspection or the image has minor blur/glare but you are reasonably sure.
+- "low" — image is blurry, heavily shadowed, partially obscured, or you had to guess at multiple digits.`;
 
 // Normalize station name using learned corrections
 function normalizeStationName(rawStation, learnedCorrections) {
@@ -985,20 +1054,67 @@ function normalizeReceiptData(data, learnedCorrections) {
   const pplFromCostLitres = (c, l) => (c > 0 && l > 0) ? (c / l) : null;
   const inPplBand = (v) => v != null && v >= PPL_MIN && v <= PPL_MAX;
 
-  const correctPpl = (reported, cost, litres, context) => {
+  // correctPpl decides between trusting the AI's reported PPL and substituting
+  // a cost÷litres-derived value. The critical risk is a cascade: if litres is
+  // misread but PPL is correct, cost÷litres produces a wrong implied PPL and
+  // we would overwrite a CORRECT field with a WRONG one.
+  //
+  // Gating rules:
+  //   • trustAiRead = AI said digits were certain AND the cents/dollars
+  //     conversion (if needed) already lands in-band. When trustAiRead is
+  //     true we never let implied-from-math overwrite it — we only use the
+  //     implied value to flag a mismatch.
+  //   • When the AI itself flagged uncertainty (digitsCertain === false),
+  //     we DO use implied as before.
+  //   • When we have no digitsCertain signal (top-level, or missing), we
+  //     fall back to the old behaviour — use implied only if AI's value is
+  //     out-of-band or blatantly wrong (>15% off), so tiny rounding
+  //     differences can't flip a correct PPL.
+  const correctPpl = (reported, cost, litres, context, digitsCertain) => {
     if (reported == null) return { value: null, note: null };
-    // Try both as-is and /100 interpretations
     const asIs = reported;
     const asCents = reported > 10 ? reported / 100 : null;
     const implied = pplFromCostLitres(cost, litres);
 
-    // If cost/litres gives a clean in-band PPL, treat it as the truth
+    // Pick the interpretation of `reported` that lands in-band.
+    let inBandReported = null;
+    if (inPplBand(asIs)) inBandReported = asIs;
+    else if (asCents != null && inPplBand(asCents)) inBandReported = Math.round(asCents * 10000) / 10000;
+
+    const trustAiRead = digitsCertain === true && inBandReported != null;
+
     if (inPplBand(implied)) {
       const rounded = Math.round(implied * 10000) / 10000;
       // AI value matches implied (within 1c) → trust AI value directly
       if (Math.abs(asIs - implied) < 0.015) return { value: asIs, note: null };
       if (asCents != null && Math.abs(asCents - implied) < 0.015) return { value: Math.round(asCents * 10000) / 10000, note: null };
-      // AI value doesn't match → it picked the wrong number; use implied PPL
+
+      // AI value disagrees with implied. What we do next depends on the
+      // AI's self-reported certainty on THIS field.
+      if (trustAiRead) {
+        // The AI explicitly said the digits were clear. A mismatch here
+        // usually means litres or cost was misread — DO NOT overwrite the
+        // PPL, just surface the discrepancy for manual review.
+        return {
+          value: inBandReported,
+          note: `${context}: PPL $${inBandReported}/L disagrees with cost÷litres ($${rounded}/L) — AI reported high certainty on PPL, so likely litres or cost was misread. Flagging for review.`,
+        };
+      }
+      if (digitsCertain === false) {
+        // AI told us it was unsure about this line's digits — fine to use
+        // reverse-calc to resolve the ambiguity.
+        return { value: rounded, note: `${context}: PPL ${reported} looked wrong (cost/litres implies $${rounded}/L) — corrected using cross-check (AI flagged digits as uncertain).` };
+      }
+      // No per-field certainty signal. Be conservative: only override if the
+      // AI's reading is WAY off (>15%) — small discrepancies are more likely
+      // rounding/surcharges than a PPL misread.
+      const implDiff = inBandReported != null ? Math.abs(inBandReported - rounded) / rounded : 1;
+      if (inBandReported != null && implDiff < 0.15) {
+        return {
+          value: inBandReported,
+          note: `${context}: PPL $${inBandReported}/L differs from cost÷litres ($${rounded}/L) by ${(implDiff * 100).toFixed(1)}% — keeping AI-read value; please verify.`,
+        };
+      }
       return { value: rounded, note: `${context}: PPL ${reported} looked wrong (cost/litres implies $${rounded}/L) — corrected from printed subtotal.` };
     }
     // No reliable cost÷litres → fall back to range-based interpretation
@@ -1009,9 +1125,11 @@ function normalizeReceiptData(data, learnedCorrections) {
   };
 
   data._mathIssues = data._mathIssues || [];
-  // Top-level PPL (best-effort — use overall totals if we have them)
+  // Top-level PPL — no per-field digitsCertain exists, so defer to overall
+  // scan confidence: treat "high" overall as a trust signal.
+  const topLevelDigitsCertain = (data.confidence?.overall === "high") ? true : (data.confidence?.overall === "low" ? false : undefined);
   {
-    const { value, note } = correctPpl(data.pricePerLitre, data.totalCost, data.litres, "Receipt");
+    const { value, note } = correctPpl(data.pricePerLitre, data.totalCost, data.litres, "Receipt", topLevelDigitsCertain);
     if (value !== data.pricePerLitre) {
       if (data.pricePerLitre != null) data._originalPpl = data.pricePerLitre;
       data.pricePerLitre = value;
@@ -1020,7 +1138,7 @@ function normalizeReceiptData(data, learnedCorrections) {
   }
   // Per-line PPL — use per-line cost/litres (much more accurate than totals)
   data.lines = data.lines.map((line, idx) => {
-    const { value, note } = correctPpl(line.pricePerLitre, line.cost, line.litres, `Line ${idx + 1}`);
+    const { value, note } = correctPpl(line.pricePerLitre, line.cost, line.litres, `Line ${idx + 1}`, line.digitsCertain);
     if (value !== line.pricePerLitre) {
       if (line.pricePerLitre != null) line._originalPpl = line.pricePerLitre;
       line.pricePerLitre = value;
@@ -1331,42 +1449,86 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMap
   }
 
   // ── Check learned corrections first (instant match from previous user edits) ──
+  //
+  // Key policy:
+  //   • NEW mappings are keyed by the FULL cleaned AI-read card number (or
+  //     `rego_<REGO>` when no card was available). Keying by the full string
+  //     avoids the collision risk of last-8-only keys when the fleet grows.
+  //   • LEGACY mappings keyed by last-8 are still honoured for backward
+  //     compatibility, but only when there is NO ambiguity — i.e. exactly
+  //     one stored mapping resolves to that suffix. Otherwise we skip and
+  //     let REGO_DB matching take over rather than silently guessing.
+  //   • Confidence: a mapping with confirmCount < 2 is returned as "medium"
+  //     — a single user correction could itself have been a slip. After a
+  //     second confirming correction it becomes "high".
   if (learnedCardMappings && Object.keys(learnedCardMappings).length > 0) {
     const cleanScan = scannedCard ? scannedCard.replace(/[\s*]/g, "").toUpperCase() : "";
     const cleanRego = scannedRego ? scannedRego.toUpperCase().replace(/\s+/g, "").replace(/[^A-Z0-9]/g, "") : "";
 
-    // Try matching by card unique8
+    const confidenceFor = (mapping) => (mapping?.confirmCount >= 2 ? "high" : "medium");
+
+    const resolveCardMapping = (scan) => {
+      if (!scan) return null;
+      // 1) Exact full-card match (new-format key).
+      if (learnedCardMappings[scan]) return { mapping: learnedCardMappings[scan], source: "exact" };
+      // 2) Last-8 key match (legacy format).
+      const scanSuffix = scan.length > 8 ? scan.slice(-8) : scan;
+      if (learnedCardMappings[scanSuffix] && scanSuffix !== scan) {
+        return { mapping: learnedCardMappings[scanSuffix], source: "legacy-suffix" };
+      }
+      // 3) Suffix scan across new-format keys — only accept when unambiguous.
+      if (scanSuffix.length >= 4) {
+        const suffixMatches = [];
+        for (const [key, m] of Object.entries(learnedCardMappings)) {
+          if (key.startsWith("rego_")) continue;
+          if (key === scanSuffix) continue; // already considered in (2)
+          // Compare either the stored rawCard or the key itself.
+          const storedRaw = (m.rawCard || key || "").toUpperCase();
+          if (storedRaw.length >= 8 && storedRaw.slice(-8) === scanSuffix) {
+            suffixMatches.push(m);
+          }
+        }
+        if (suffixMatches.length === 1) return { mapping: suffixMatches[0], source: "suffix-unique" };
+        // >1 candidates → ambiguous, deliberately don't pick one.
+      }
+      return null;
+    };
+
     if (cleanScan) {
-      const scanUnique8 = cleanScan.length > 8 ? cleanScan.slice(-8) : cleanScan;
-      const mapping = learnedCardMappings[scanUnique8];
-      if (mapping) {
-        console.log(`Fleet card auto-corrected from learned mapping: "${scanUnique8}" → ${mapping.correctCard} (${mapping.correctRego})`);
+      const hit = resolveCardMapping(cleanScan);
+      if (hit) {
+        const { mapping, source } = hit;
+        console.log(`Fleet card auto-corrected from learned mapping (${source}): "${cleanScan}" → ${mapping.correctCard} (${mapping.correctRego}) — confirmCount=${mapping.confirmCount || 1}`);
         return {
           cardNumber: mapping.correctCard,
           vehicleOnCard: mapping.correctRego,
           _corrected: true,
-          _confidence: "high",
+          _confidence: confidenceFor(mapping),
           _confusableRegos: null,
           _originalCard: scannedCard,
           _originalRego: scannedRego,
           _learnedMatch: true,
+          _learnedSource: source,
+          _learnedConfirmCount: mapping.confirmCount || 1,
         };
       }
     }
-    // Try matching by rego
+
     if (cleanRego) {
       const regoMapping = learnedCardMappings[`rego_${cleanRego}`];
       if (regoMapping) {
-        console.log(`Fleet card auto-corrected from learned rego mapping: "${cleanRego}" → ${regoMapping.correctCard}`);
+        console.log(`Fleet card auto-corrected from learned rego mapping: "${cleanRego}" → ${regoMapping.correctCard} — confirmCount=${regoMapping.confirmCount || 1}`);
         return {
           cardNumber: regoMapping.correctCard,
           vehicleOnCard: regoMapping.correctRego,
           _corrected: true,
-          _confidence: "high",
+          _confidence: confidenceFor(regoMapping),
           _confusableRegos: null,
           _originalCard: scannedCard,
           _originalRego: scannedRego,
           _learnedMatch: true,
+          _learnedSource: "rego",
+          _learnedConfirmCount: regoMapping.confirmCount || 1,
         };
       }
     }
@@ -2983,12 +3145,25 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
   // Fleet card mistake flag — only flag when the card TEXT read is itself
   // uncertain. Card/rego mismatch is NOT an error (many drivers share cards),
   // so we deliberately do not flag mismatches here.
-  if (entry._cardConfidence === "low") {
+  //
+  // _cardConfidence comes from the AI's own self-report on how clearly it
+  // could read the embossed digits — NOT from the fuzzy matcher (which has
+  // its own `_cardMatchConfidence`). A scan where the AI confidently read
+  // digits but the matcher couldn't map them to a known card is not an AI
+  // error; the card may simply be new or the matcher's DB out of date.
+  if (entry._cardConfidence === "low" || entry._cardConfidence === "medium") {
+    const raw = entry._cardRawRead || entry._cardOriginalCard || "?";
+    const issues = Array.isArray(entry._cardAiIssues) && entry._cardAiIssues.length
+      ? ` Issues: ${entry._cardAiIssues.join("; ")}.`
+      : "";
+    const wording = entry._cardConfidence === "low"
+      ? "couldn't confidently read"
+      : "was only partially confident reading";
     flags.push({
       category: "ai",
-      type: "warn",
+      type: entry._cardConfidence === "low" ? "danger" : "warn",
       text: "Fleet card unclear",
-      detail: `Scanner wasn't confident reading the fleet card number (AI saw "${entry._cardOriginalCard || "?"}"). Verify and correct if needed.`,
+      detail: `Scanner ${wording} the fleet card (AI saw "${raw}").${issues} Verify the card number and rego below.`,
     });
   }
 
@@ -3779,6 +3954,26 @@ export default function App() {
   // Learn fleet card ↔ rego association immediately when user edits card data on Steps 2/3
   // This ensures future scans benefit from manual corrections without waiting for submission
   // Also learns raw AI misread → correct card mapping for future auto-correction
+  // Build a cardData shape that carries both the matcher's confidence (whether
+  // we could map this scan to a known card) and the AI's own confidence
+  // (whether the embossed digits were legible). These are two different
+  // signals — the first drives auto-correction behaviour, the second drives
+  // the "Fleet card unclear" admin flag. They must not be conflated.
+  const buildCardDataFromMatch = (matched, aiResult) => ({
+    cardNumber: matched.cardNumber,
+    vehicleOnCard: matched.vehicleOnCard,
+    _corrected: matched._corrected,
+    _matchConfidence: matched._confidence, // fuzzy-matcher confidence
+    _aiConfidence: aiResult?.confidence?.overall || null, // AI's self-report
+    _aiIssues: aiResult?.confidence?.issues || [],
+    _rawCardRead: aiResult?.rawCardRead || aiResult?.cardNumber || null,
+    _confusableRegos: matched._confusableRegos,
+    _originalCard: matched._originalCard,
+    _originalRego: matched._originalRego,
+    _knownException: matched._knownException,
+    actualVehicleRego: matched.actualVehicleRego,
+  });
+
   const learnFleetCardCorrection = useCallback((cardNumber, cardRego, rawCardFromAI, rawRegoFromAI) => {
     if (!cardRego || !cardNumber) return;
     const rego = cardRego.toUpperCase().replace(/\s+/g, "");
@@ -3806,22 +4001,45 @@ export default function App() {
 
     if (cardDiffers || regoDiffers) {
       const currentMappings = learnedCardMappingsRef.current;
-      // Key by the raw card unique8 (or raw rego if no card was read)
+      // Key by the FULL raw card (previously last-8 — risked cross-card collisions).
+      // Fall back to rego-based key when no card was read.
       const rawKey = cleanRawCard
-        ? (cleanRawCard.length > 8 ? cleanRawCard.slice(-8) : cleanRawCard)
+        ? cleanRawCard
         : `rego_${cleanRawRego}`;
+
+      // Migrate / dedupe legacy last-8 key if present and consistent
+      const legacyKey = cleanRawCard && cleanRawCard.length > 8 ? cleanRawCard.slice(-8) : null;
+      const legacyEntry = legacyKey && currentMappings[legacyKey];
+
+      const existingAtKey = currentMappings[rawKey];
+      const sameTarget = existingAtKey
+        && existingAtKey.correctCard === card
+        && existingAtKey.correctRego === rego;
+      const legacySameTarget = legacyEntry
+        && legacyEntry.correctCard === card
+        && legacyEntry.correctRego === rego;
+
+      const priorCount = sameTarget
+        ? (existingAtKey.confirmCount || 1)
+        : (legacySameTarget ? (legacyEntry.confirmCount || 1) : 0);
 
       const newMapping = {
         correctCard: card,
         correctRego: rego,
         rawCard: cleanRawCard || null,
         rawRego: cleanRawRego || null,
-        learnedAt: new Date().toISOString(),
+        confirmCount: priorCount + 1,
+        learnedAt: existingAtKey?.learnedAt || new Date().toISOString(),
+        lastSeen: new Date().toISOString(),
       };
 
       const updatedMappings = { ...currentMappings, [rawKey]: newMapping };
+      // Drop the legacy last-8 entry if it was pointing to the same target
+      if (legacyKey && legacyKey !== rawKey && legacySameTarget) {
+        delete updatedMappings[legacyKey];
+      }
       persistCardMappings(updatedMappings);
-      console.log(`Learned card correction: "${rawKey}" → card ${card}, rego ${rego}`);
+      console.log(`Learned card correction: "${rawKey}" → card ${card}, rego ${rego} (confirmCount=${newMapping.confirmCount})`);
     }
   }, []);
 
@@ -4213,7 +4431,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       }
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
-        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego, _knownException: matched._knownException, actualVehicleRego: matched.actualVehicleRego });
+        setCardData(buildCardDataFromMatch(matched, result));
         // Known card/rego exception (e.g. Carlos Carillo's WIA53F card for EIA53F vehicle):
         // auto-fill form registration with the ACTUAL vehicle rego, not the one on the card.
         if (matched._knownException && matched.actualVehicleRego && !form.registration) {
@@ -4251,7 +4469,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       }
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
-        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego, _knownException: matched._knownException, actualVehicleRego: matched.actualVehicleRego });
+        setCardData(buildCardDataFromMatch(matched, result));
         // Known card/rego exception (e.g. Carlos Carillo's WIA53F card for EIA53F vehicle):
         // auto-fill form registration with the ACTUAL vehicle rego, not the one on the card.
         if (matched._knownException && matched.actualVehicleRego && !form.registration) {
@@ -4280,7 +4498,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       }
       if (normalized.cardNumber || normalized.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
-        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego, _knownException: matched._knownException, actualVehicleRego: matched.actualVehicleRego });
+        setCardData(buildCardDataFromMatch(matched, result));
         // Known card/rego exception (e.g. Carlos Carillo's WIA53F card for EIA53F vehicle):
         // auto-fill form registration with the ACTUAL vehicle rego, not the one on the card.
         if (matched._knownException && matched.actualVehicleRego && !form.registration) {
@@ -4302,19 +4520,19 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     try {
       const { b64, mime } = await compressImage(file);
       setCardB64(b64);
-      const result = await claudeScan(apiKey, b64, mime,
-        `Extract fleet card details from this Shell FleetCard image. The card layout top to bottom is:
-Line 1: "FleetCard" logo
-Line 2: 16-digit card number starting with 7034
-Line 3: Cardholder surname + vehicle model (e.g. "WHITE NNR-451") — this is NOT the rego
-Line 4: VEHICLE REGISTRATION — the actual rego (e.g. "DF25LB") — short 5-7 char alphanumeric code
-Line 5: Expiry date
-
-CRITICAL: The registration is on the line BELOW the surname. Do NOT return the surname line as the rego.
-
-Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnCard":"registration from line 4 or null"}`
-      );
-      setCardData(result);
+      const result = await claudeScan(apiKey, b64, mime, buildCardScanPrompt());
+      if (result?.cardNumber || result?.vehicleOnCard) {
+        // Run the matcher so the card-only flow benefits from the same
+        // learned-mapping and REGO_DB lookups as the combined-scan flow,
+        // and so _matchConfidence / _aiConfidence stay separated consistently.
+        const matched = fuzzyMatchFleetCard(result.cardNumber, result.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
+        setCardData(buildCardDataFromMatch(matched, result));
+        if (matched._knownException && matched.actualVehicleRego && !form.registration) {
+          setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
+        }
+      } else {
+        setCardData(null);
+      }
     } catch (e) { setError("Card scan failed \u2014 " + e.message); }
     setCardScanning(false);
   };
@@ -4367,11 +4585,18 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         hasReceipt: !!receiptB64,
         _aiConfidence: receiptData?.confidence?.overall || null,
         _aiIssues: [...(receiptData?.confidence?.issues || []), ...(receiptData?._mathIssues || [])],
-        _cardConfidence: cardData?._confidence || null,
+        // _cardConfidence now tracks the AI's own confidence in its read,
+        // NOT the matcher's confidence. This is what the "Fleet card unclear"
+        // admin flag fires on — we want to know when the SCANNER was unsure,
+        // not when the matcher couldn't map a confident scan.
+        _cardConfidence: cardData?._aiConfidence || null,
+        _cardMatchConfidence: cardData?._matchConfidence || null,
         _cardCorrected: !!cardData?._corrected,
         _cardConfusable: cardData?._confusableRegos || null,
         _cardOriginalCard: cardData?._originalCard || null,
         _cardOriginalRego: cardData?._originalRego || null,
+        _cardRawRead: cardData?._rawCardRead || null,
+        _cardAiIssues: cardData?._aiIssues || null,
         _reviewConfirmed: needsReviewConfirmation ? reviewConfirmed : null, // null=clean scan, true=user confirmed a suspect scan
       };
       await persist([...entries, otherEntry], otherEntry);
@@ -4440,11 +4665,18 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         hasReceipt: !!receiptB64,
         _aiConfidence: receiptData?.confidence?.overall || null,
         _aiIssues: [...(receiptData?.confidence?.issues || []), ...(receiptData?._mathIssues || [])],
-        _cardConfidence: cardData?._confidence || null,
+        // _cardConfidence now tracks the AI's own confidence in its read,
+        // NOT the matcher's confidence. This is what the "Fleet card unclear"
+        // admin flag fires on — we want to know when the SCANNER was unsure,
+        // not when the matcher couldn't map a confident scan.
+        _cardConfidence: cardData?._aiConfidence || null,
+        _cardMatchConfidence: cardData?._matchConfidence || null,
         _cardCorrected: !!cardData?._corrected,
         _cardConfusable: cardData?._confusableRegos || null,
         _cardOriginalCard: cardData?._originalCard || null,
         _cardOriginalRego: cardData?._originalRego || null,
+        _cardRawRead: cardData?._rawCardRead || null,
+        _cardAiIssues: cardData?._aiIssues || null,
         _reviewConfirmed: needsReviewConfirmation ? reviewConfirmed : null, // null=clean scan, true=user confirmed a suspect scan
       };
     };
@@ -5678,21 +5910,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     setReceiptScanning(true); setError("");
     try {
       const { b64, mime } = await compressImage(file);
-      const result = await claudeScan(apiKey, b64, mime,
-        `Extract fleet card details from this Shell FleetCard image. The card layout top to bottom is:
-Line 1: "FleetCard" logo
-Line 2: 16-digit card number starting with 7034
-Line 3: Cardholder surname + vehicle model (e.g. "WHITE NNR-451") — this is NOT the rego
-Line 4: VEHICLE REGISTRATION — the actual rego (e.g. "DF25LB") — short 5-7 char alphanumeric code
-Line 5: Expiry date
-
-CRITICAL: The registration is on the line BELOW the surname. Do NOT return the surname line as the rego.
-
-Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnCard":"registration from line 4 or null"}`
-      );
+      const result = await claudeScan(apiKey, b64, mime, buildCardScanPrompt());
       if (result?.cardNumber || result?.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(result.cardNumber, result.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
-        setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego, _knownException: matched._knownException, actualVehicleRego: matched.actualVehicleRego });
+        setCardData(buildCardDataFromMatch(matched, result));
         if (matched._knownException && matched.actualVehicleRego && !form.registration) {
           setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
         }
@@ -6170,7 +6391,10 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             const cleanRego = (manualReceipt.cardRego || "").trim().toUpperCase();
             if (cleanCard || cleanRego) {
               const matched = fuzzyMatchFleetCard(cleanCard, cleanRego, learnedDBRef.current, learnedCardMappingsRef.current);
-              setCardData({ cardNumber: matched.cardNumber, vehicleOnCard: matched.vehicleOnCard, _corrected: matched._corrected, _confidence: matched._confidence, _confusableRegos: matched._confusableRegos, _originalCard: matched._originalCard, _originalRego: matched._originalRego, _knownException: matched._knownException, actualVehicleRego: matched.actualVehicleRego });
+              // Manual entry — no AI scan was involved, so no AI-side
+              // confidence exists. Pass null so the flag-firing logic knows
+              // this wasn't machine-read.
+              setCardData(buildCardDataFromMatch(matched, null));
               if (matched._knownException && matched.actualVehicleRego && !form.registration) {
                 setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
               }
@@ -7011,11 +7235,18 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         hasReceipt: !!receiptB64,
         _aiConfidence: receiptData?.confidence?.overall || null,
         _aiIssues: ["Auto-detected extra fuel line from receipt"],
-        _cardConfidence: cardData?._confidence || null,
+        // _cardConfidence now tracks the AI's own confidence in its read,
+        // NOT the matcher's confidence. This is what the "Fleet card unclear"
+        // admin flag fires on — we want to know when the SCANNER was unsure,
+        // not when the matcher couldn't map a confident scan.
+        _cardConfidence: cardData?._aiConfidence || null,
+        _cardMatchConfidence: cardData?._matchConfidence || null,
         _cardCorrected: !!cardData?._corrected,
         _cardConfusable: cardData?._confusableRegos || null,
         _cardOriginalCard: cardData?._originalCard || null,
         _cardOriginalRego: cardData?._originalRego || null,
+        _cardRawRead: cardData?._rawCardRead || null,
+        _cardAiIssues: cardData?._aiIssues || null,
       };
       const newEntries = insertChronological(entries, entry);
       await persist(newEntries, entry);
