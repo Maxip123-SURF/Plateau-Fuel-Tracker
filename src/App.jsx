@@ -622,6 +622,13 @@ The SUBTOTAL is ALWAYS the rightmost (and largest) number on the line. The PPL i
 
 CROSS-CHECK BEFORE RETURNING: For every fuel line, verify litres × pricePerLitre ≈ subtotal_cost. If the product is >20% off the printed subtotal, you have misread one of the three numbers — re-read them before returning.
 
+⚠️ CRITICAL: SUBTOTAL-PER-LINE ≠ GRAND TOTAL ⚠️
+When the receipt has MULTIPLE entries (e.g. Diesel + AdBlue), each line has its OWN subtotal. The grand TOTAL at the bottom is the SUM of all subtotals. NEVER cross-check a single line's litres × PPL against the grand total — only against THAT line's own subtotal. Example:
+  Diesel: 144.10L × $2.829/L = $407.60  ← line subtotal
+  AdBlue: 25.10L × $2.980/L = $74.80    ← line subtotal
+  TOTAL: $482.40                          ← grand total (sum)
+Diesel PPL cross-checks against $407.60 only, NOT $482.40.
+
 If a fuel entry spans 2 lines, the format is often:
   Line A: "1 FUEL TYPE NAME          $SUBTOTAL_COST  B"
   Line B: "Pump: XX  QUANTITY Litre  PRICE$/L"
@@ -1129,7 +1136,23 @@ function normalizeReceiptData(data, learnedCorrections) {
   // scan confidence: treat "high" overall as a trust signal.
   const topLevelDigitsCertain = (data.confidence?.overall === "high") ? true : (data.confidence?.overall === "low" ? false : undefined);
   {
-    const { value, note } = correctPpl(data.pricePerLitre, data.totalCost, data.litres, "Receipt", topLevelDigitsCertain);
+    // IMPORTANT: Only reverse-calc the top-level PPL against totalCost when the
+    // receipt has a SINGLE fuel line and NO other items. Otherwise totalCost
+    // includes adblue/oil/other items and the math will mislead us into
+    // "correcting" a perfectly good PPL. Per-line correction below handles
+    // multi-line receipts using each line's own subtotal.
+    const singleFuelLine = Array.isArray(data.lines) && data.lines.length === 1;
+    const noOtherItems = !Array.isArray(data.otherItems) || data.otherItems.length === 0;
+    const noDiscounts = !data.discounts || data.discounts === 0;
+    const safeToUseTotal = singleFuelLine && noOtherItems && noDiscounts;
+    // Prefer the single line's own subtotal if present, else fall back to totalCost when safe
+    const topLevelCost = singleFuelLine && data.lines[0]?.cost != null
+      ? data.lines[0].cost
+      : (safeToUseTotal ? data.totalCost : null);
+    const topLevelLitres = singleFuelLine && data.lines[0]?.litres != null
+      ? data.lines[0].litres
+      : (safeToUseTotal ? data.litres : null);
+    const { value, note } = correctPpl(data.pricePerLitre, topLevelCost, topLevelLitres, "Receipt", topLevelDigitsCertain);
     if (value !== data.pricePerLitre) {
       if (data.pricePerLitre != null) data._originalPpl = data.pricePerLitre;
       data.pricePerLitre = value;
@@ -1169,9 +1192,15 @@ function normalizeReceiptData(data, learnedCorrections) {
     });
   }
 
-  // If there's only one fuel line and it's missing cost, inherit from totalCost
+  // If there's only one fuel line and it's missing cost, inherit from totalCost —
+  // but ONLY if there are no otherItems/discounts (otherwise totalCost includes
+  // adblue/oil/fees and would overstate the fuel line's subtotal).
   if (data.lines.length === 1 && !data.lines[0].cost && data.totalCost) {
-    data.lines[0].cost = data.totalCost;
+    const noOtherItems = !Array.isArray(data.otherItems) || data.otherItems.length === 0;
+    const noDiscounts = !data.discounts || data.discounts === 0;
+    if (noOtherItems && noDiscounts) {
+      data.lines[0].cost = data.totalCost;
+    }
   }
 
   data.lines = data.lines.map((line, idx) => {
