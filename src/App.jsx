@@ -3161,6 +3161,7 @@ export default function App() {
   const [flagsRegoSearch, setFlagsRegoSearch] = useState(""); // rego search in flags modal
   const [flagDetailPopup, setFlagDetailPopup] = useState(null); // { flag, x, y } for inline flag detail popup
   const [expandedReceipt, setExpandedReceipt] = useState(null); // flagId or entryId whose receipt is shown inline
+  const [selectedFlagIds, setSelectedFlagIds] = useState(() => new Set()); // bulk-select for flag modals
   const [editingEntry, setEditingEntry] = useState(null); // entry object being edited
   const [vehicleMenu, setVehicleMenu] = useState(null); // rego string for open menu
   const [editingVehicle, setEditingVehicle] = useState(null); // rego string for edit vehicle modal
@@ -3577,6 +3578,21 @@ export default function App() {
   const unresolveFlag = (fid) => {
     const { [fid]: _, ...rest } = resolvedFlags;
     persistResolved(rest, fid, true);
+  };
+
+  // Bulk resolve — single local/state write, parallel cloud writes.
+  // Much faster than looping resolveFlag() which would serialise N network calls.
+  const resolveFlagsBulk = async (fids, note, by) => {
+    if (!fids || fids.length === 0) return;
+    const at = new Date().toISOString();
+    const flagData = { by: by || "Admin", note: note || "Bulk resolved", at };
+    const updated = { ...resolvedFlags };
+    for (const fid of fids) updated[fid] = flagData;
+    setResolvedFlags(updated);
+    try { await window.storage.set("fuel_resolved_flags", JSON.stringify(updated)); } catch (_) {}
+    // Fire all cloud writes in parallel — failures don't block the UI.
+    await Promise.all(fids.map(fid => db.saveResolvedFlag(fid, flagData).catch(() => {})));
+    showToast(`Resolved ${fids.length} issue${fids.length === 1 ? "" : "s"}`);
   };
 
   // Persist learned card mappings to local + cloud storage
@@ -9208,6 +9224,82 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
       </div>
     );
   };
+  // Reusable bulk-action bar for flag modals.
+  // Shows: [select-all] N selected of M visible · [Resolve N selected] [Clear]
+  const BulkActionBar = ({ visibleIds, openIds, accent }) => {
+    const selectableIds = openIds; // only open flags can be bulk-resolved
+    const allSelectableSelected = selectableIds.length > 0 && selectableIds.every(id => selectedFlagIds.has(id));
+    const someSelected = selectableIds.some(id => selectedFlagIds.has(id));
+    const selectedOpenIds = selectableIds.filter(id => selectedFlagIds.has(id));
+    const toggleAll = () => {
+      setSelectedFlagIds(prev => {
+        const next = new Set(prev);
+        if (allSelectableSelected) { for (const id of selectableIds) next.delete(id); }
+        else { for (const id of selectableIds) next.add(id); }
+        return next;
+      });
+    };
+    if (selectableIds.length === 0 && selectedFlagIds.size === 0) return null;
+    return (
+      <div style={{
+        display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+        padding: "8px 12px", marginBottom: 12, borderRadius: 8,
+        background: someSelected ? "#eff6ff" : "#f8fafc",
+        border: `1px solid ${someSelected ? (accent || "#2563eb") : "#e2e8f0"}`,
+      }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, color: "#374151", fontWeight: 600 }}>
+          <input type="checkbox" checked={allSelectableSelected}
+            onChange={toggleAll}
+            ref={el => { if (el) el.indeterminate = !allSelectableSelected && someSelected; }}
+            style={{ width: 16, height: 16, cursor: "pointer", accentColor: accent || "#2563eb" }}
+          />
+          Select all open ({selectableIds.length})
+        </label>
+        <div style={{ flex: 1, fontSize: 11, color: "#64748b" }}>
+          {selectedOpenIds.length > 0 && <span style={{ fontWeight: 600, color: accent || "#2563eb" }}>{selectedOpenIds.length} selected</span>}
+        </div>
+        {selectedOpenIds.length > 0 && (
+          <>
+            <button onClick={async () => {
+              await resolveFlagsBulk(selectedOpenIds, "Bulk resolved", "Admin");
+              setSelectedFlagIds(new Set());
+            }} style={{
+              padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700,
+              background: "#16a34a", color: "white", border: "none",
+              cursor: "pointer", fontFamily: "inherit",
+            }}>{"\u2713"} Resolve {selectedOpenIds.length} selected</button>
+            <button onClick={() => setSelectedFlagIds(new Set())} style={{
+              padding: "6px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+              background: "white", color: "#64748b", border: "1px solid #e2e8f0",
+              cursor: "pointer", fontFamily: "inherit",
+            }}>Clear</button>
+          </>
+        )}
+      </div>
+    );
+  };
+
+  // Per-row bulk-select checkbox (small, left of the flag row)
+  const BulkSelectBox = ({ id, disabled, accent }) => (
+    <input type="checkbox" checked={selectedFlagIds.has(id)} disabled={disabled}
+      onChange={e => {
+        e.stopPropagation();
+        setSelectedFlagIds(prev => {
+          const next = new Set(prev);
+          if (next.has(id)) next.delete(id); else next.add(id);
+          return next;
+        });
+      }}
+      onClick={e => e.stopPropagation()}
+      title={disabled ? "Already resolved" : "Select for bulk resolve"}
+      style={{
+        width: 16, height: 16, cursor: disabled ? "not-allowed" : "pointer",
+        flexShrink: 0, marginTop: 4, accentColor: accent || "#2563eb",
+        opacity: disabled ? 0.4 : 1,
+      }}
+    />
+  );
+
   const renderFlagsModal = () => {
     if (!showFlags) return null;
     const fleet = fleetAnalysis;
@@ -9257,7 +9349,9 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
           opacity: isResolved ? 0.7 : 1, transition: "all 0.2s",
         }}>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-            {/* Checkbox */}
+            {/* Bulk select (disabled if already resolved) */}
+            <BulkSelectBox id={f._id} disabled={isResolved} accent="#f59e0b" />
+            {/* Resolve toggle */}
             <button onClick={() => isResolved ? unresolveFlag(f._id) : setReplyingFlag(isReplying ? null : f._id)}
               style={{
                 width: 22, height: 22, borderRadius: 6, border: `2px solid ${isResolved ? "#16a34a" : "#cbd5e1"}`,
@@ -9334,7 +9428,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex",
         alignItems: "flex-start", justifyContent: "center", zIndex: 100, padding: "40px 16px",
         overflowY: "auto",
-      }} onClick={() => { setShowFlags(false); setReplyingFlag(null); setFlagsRegoSearch(""); }}>
+      }} onClick={() => { setShowFlags(false); setReplyingFlag(null); setFlagsRegoSearch(""); setSelectedFlagIds(new Set()); }}>
         <div onClick={e => e.stopPropagation()} style={{
           background: "white", borderRadius: 14, padding: 24, width: "100%", maxWidth: 640,
           boxShadow: "0 20px 60px rgba(0,0,0,0.2)", maxHeight: "85vh", overflowY: "auto",
@@ -9348,7 +9442,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                 {regoQ && <span style={{ color: "#2563eb", fontWeight: 600 }}> {"\u00B7"} filtered: {flagsRegoSearch}</span>}
               </div>
             </div>
-            <button onClick={() => { setShowFlags(false); setReplyingFlag(null); setFlagsRegoSearch(""); }} style={{
+            <button onClick={() => { setShowFlags(false); setReplyingFlag(null); setFlagsRegoSearch(""); setSelectedFlagIds(new Set()); }} style={{
               background: "none", border: "none", fontSize: 24, color: "#94a3b8", cursor: "pointer", lineHeight: 1,
             }}>{"\u00D7"}</button>
           </div>
@@ -9426,6 +9520,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             )}
           </div>
 
+          {/* Bulk action bar */}
+          <BulkActionBar
+            visibleIds={visibleFlags.map(f => f._id)}
+            openIds={visibleFlags.filter(f => !resolvedFlags[f._id]).map(f => f._id)}
+            accent="#f59e0b"
+          />
+
           {/* Flag list */}
           {visibleFlags.length === 0 ? (
             <div style={{ textAlign: "center", padding: "32px 0", color: flagsFilter === "open" ? "#15803d" : "#94a3b8" }}>
@@ -9465,7 +9566,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
         position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex",
         alignItems: "flex-start", justifyContent: "center", zIndex: 100, padding: "40px 16px",
         overflowY: "auto",
-      }} onClick={() => setShowAiFlags(false)}>
+      }} onClick={() => { setShowAiFlags(false); setSelectedFlagIds(new Set()); }}>
         <div onClick={e => e.stopPropagation()} style={{
           background: "white", borderRadius: 14, padding: 24, width: "100%", maxWidth: 640,
           boxShadow: "0 20px 60px rgba(0,0,0,0.2)", maxHeight: "85vh", overflowY: "auto",
@@ -9478,7 +9579,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                 {openFlags.length} to review {"\u00B7"} {doneFlags.length} resolved
               </div>
             </div>
-            <button onClick={() => setShowAiFlags(false)} style={{
+            <button onClick={() => { setShowAiFlags(false); setSelectedFlagIds(new Set()); }} style={{
               background: "none", border: "none", fontSize: 24, color: "#94a3b8", cursor: "pointer", lineHeight: 1,
             }}>{"\u00D7"}</button>
           </div>
@@ -9519,6 +9620,13 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
             ))}
           </div>
 
+          {/* Bulk action bar */}
+          <BulkActionBar
+            visibleIds={visibleFlags.map(f => f._id)}
+            openIds={visibleFlags.filter(f => !resolvedFlags[f._id]).map(f => f._id)}
+            accent="#7c3aed"
+          />
+
           {/* Flag list */}
           {visibleFlags.length === 0 ? (
             <div style={{ textAlign: "center", padding: "32px 0", color: aiFlagsFilter === "open" ? "#15803d" : "#94a3b8" }}>
@@ -9539,6 +9647,7 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                   opacity: isResolved ? 0.7 : 1,
                 }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                    <BulkSelectBox id={f._id} disabled={isResolved} accent="#7c3aed" />
                     <div style={{ flex: 1 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                         <span style={{ fontWeight: 700, color: "#0f172a", fontSize: 12 }}>{f.rego}</span>
