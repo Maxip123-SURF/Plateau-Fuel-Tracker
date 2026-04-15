@@ -2972,25 +2972,39 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
   // These appear in the DATA section for manual review/correction
   // ══════════════════════════════════════════════════════════════════════════
 
-  // AI Confidence Flags — roll fleet card uncertainty into the detail too
-  // (embossed cards are a common AI misread, so treat them the same as
-  // receipt-level uncertainty)
-  const cardIssues = [];
+  // AI Confidence Flags — receipt-level uncertainty
+  const allIssues = [...(entry._aiIssues || [])];
+  if (entry._aiConfidence === "low") {
+    flags.push({ category: "ai", type: "danger", text: "AI low confidence", detail: `The scanner was unsure about this receipt. Issues: ${allIssues.join(", ") || "unclear image"}` });
+  } else if (entry._aiConfidence === "medium") {
+    flags.push({ category: "ai", type: "warn", text: "AI uncertain", detail: `Some values may be inaccurate. Issues: ${allIssues.join(", ") || "partially unclear"}` });
+  }
+
+  // Fleet card mistake flags — surface as distinct line items in AI review
+  // so admins can spot/fix card misreads independently of receipt issues.
   if (entry._cardConfidence === "low") {
-    cardIssues.push(`fleet card unclear (AI read "${entry._cardOriginalCard || "?"}"${entry._cardOriginalRego ? `, rego "${entry._cardOriginalRego}"` : ""})`);
+    flags.push({
+      category: "ai",
+      type: "danger",
+      text: "Fleet card unclear",
+      detail: `Scanner could not read the fleet card clearly (AI saw card "${entry._cardOriginalCard || "?"}"${entry._cardOriginalRego ? `, rego "${entry._cardOriginalRego}"` : ""}). Verify card number and rego.`,
+    });
   }
   if (Array.isArray(entry._cardConfusable) && entry._cardConfusable.length > 0) {
-    cardIssues.push(`similar regos detected: ${entry._cardConfusable.join(", ")}`);
+    flags.push({
+      category: "ai",
+      type: "warn",
+      text: "Similar regos detected on card",
+      detail: `The fleet card read is easily confused with: ${entry._cardConfusable.join(", ")}. Double-check the vehicle.`,
+    });
   }
-  const allIssues = [...(entry._aiIssues || []), ...cardIssues];
-
-  if (entry._aiConfidence === "low" || entry._cardConfidence === "low") {
-    const why = entry._aiConfidence === "low"
-      ? "The scanner was unsure about this receipt."
-      : "The scanner could not clearly read the fleet card.";
-    flags.push({ category: "ai", type: "danger", text: "AI low confidence", detail: `${why} Issues: ${allIssues.join(", ") || "unclear image"}` });
-  } else if (entry._aiConfidence === "medium" || cardIssues.length > 0) {
-    flags.push({ category: "ai", type: "warn", text: "AI uncertain", detail: `Some values may be inaccurate. Issues: ${allIssues.join(", ") || "partially unclear"}` });
+  if (entry._cardCorrected) {
+    flags.push({
+      category: "ai",
+      type: "info",
+      text: "Fleet card auto-corrected",
+      detail: `AI originally read card "${entry._cardOriginalCard || "?"}"${entry._cardOriginalRego ? `, rego "${entry._cardOriginalRego}"` : ""} — auto-corrected using previously learned mapping.`,
+    });
   }
 
   // Registration looks suspicious
@@ -2999,12 +3013,20 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
     flags.push({ category: "ai", type: "warn", text: "Unusual rego format", detail: `"${rego}" — expected 4-8 characters` });
   }
 
-  // Known card/rego exception — suppress mismatch warning and surface as info
+  // Card/rego mismatch — either a known exception (info) or a potential scan
+  // mistake the admin should review (warn).
   const cardRego = entry.cardRego || entry.fleetCardVehicle || "";
   if (cardRego && rego && cardRego.toUpperCase().replace(/\s+/g, "") !== rego.toUpperCase().replace(/\s+/g, "")) {
     const exception = isKnownCardRegoException(cardRego, rego);
     if (exception) {
       flags.push({ category: "ai", type: "info", text: "Known card/rego exception", detail: `${exception.driver}: card embossed "${exception.cardRego}" but vehicle is "${exception.vehicleRego}" — ${exception.reason}` });
+    } else {
+      flags.push({
+        category: "ai",
+        type: "warn",
+        text: "Card rego doesn't match vehicle",
+        detail: `Fleet card embossed "${cardRego}" but entry rego is "${rego}" — possible card or rego misread.`,
+      });
     }
   }
 
@@ -7300,16 +7322,18 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
     const regoCount = new Set(vehicleEntries.map(e => e.registration)).size;
     const filteredRegoCount = new Set(filtered.map(e => e.registration)).size;
 
-    // Count operational flags only (excluding resolved) — AI flags show in Data section
+    // Count flags directly from the SAME enriched objects the modal uses.
+    // Regenerating flags via a parallel loop (as we used to) risked producing
+    // flag.text values that differed in whitespace/derived numbers, so the
+    // resolvedFlags[flagId] lookup would miss and counts would never drop.
     let totalFlags = 0;
     let totalAiFlags = 0;
-    [...new Set(vehicleEntries.map(e => e.registration))].forEach(rego => {
-      const re = vehicleEntries.filter(e => e.registration === rego).sort(sortEntries);
-      const vt = re[0]?.vehicleType || "Other";
-      re.forEach((e, i) => {
-        const flags = getEntryFlags(e, i > 0 ? re[i - 1] : null, vt, serviceData[rego]);
-        totalFlags += flags.filter(f => f.category === "ops" && (f.type === "danger" || f.type === "warn") && !resolvedFlags[flagId({ ...f, rego, date: e.date, odo: e.odometer })]).length;
-        totalAiFlags += flags.filter(f => f.category === "ai" && (f.type === "danger" || f.type === "warn") && !resolvedFlags[flagId({ ...f, rego, date: e.date, odo: e.odometer })]).length;
+    fleetAnalysis.forEach(v => {
+      v.flags.forEach(f => {
+        if (f.type !== "danger" && f.type !== "warn") return;
+        if (resolvedFlags[flagId(f)]) return;
+        if (f.category === "ops") totalFlags++;
+        else if (f.category === "ai") totalAiFlags++;
       });
     });
 
@@ -7359,18 +7383,15 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
 
         {/* AI Review Panel */}
         {isAdmin && showAiReview && (() => {
+          // Reuse fleetAnalysis enriched flags so IDs match the KPI + modal exactly
           const aiFlags = [];
-          [...new Set(vehicleEntries.map(e => e.registration))].forEach(rego => {
-            const re = vehicleEntries.filter(e => e.registration === rego).sort(sortEntries);
-            const vt = re[0]?.vehicleType || "Other";
-            re.forEach((e, i) => {
-              const flags = getEntryFlags(e, i > 0 ? re[i - 1] : null, vt, serviceData[rego]);
-              flags.filter(f => f.category === "ai" && (f.type === "danger" || f.type === "warn")).forEach(f => {
-                const fid = flagId({ ...f, rego, date: e.date, odo: e.odometer });
-                if (!resolvedFlags[fid]) {
-                  aiFlags.push({ ...f, rego, date: e.date, _id: fid, _entry: e });
-                }
-              });
+          fleetAnalysis.forEach(v => {
+            v.flags.forEach(f => {
+              if (f.category !== "ai") return;
+              if (f.type !== "danger" && f.type !== "warn") return;
+              const fid = flagId(f);
+              if (resolvedFlags[fid]) return;
+              aiFlags.push({ ...f, _id: fid });
             });
           });
 
