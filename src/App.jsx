@@ -7642,7 +7642,10 @@ Return ONLY valid JSON: {"cardNumber":"full 16 digit number or null","vehicleOnC
                       sorted.forEach((e, i) => {
                         const flags = getEntryFlags(e, i > 0 ? sorted[i - 1] : null, vt, serviceData[rego]);
                         flags.forEach(f => {
-                          const enriched = { ...f, rego, entryDate: e.date, odo: e.odometer, _entry: e };
+                          // Must set `date` (not just `entryDate`) so flagId matches
+                          // the IDs produced by the modal/KPI count — otherwise the
+                          // "resolved" lookup here always misses and counts stay high.
+                          const enriched = { ...f, rego, date: e.date, entryDate: e.date, odo: e.odometer, _entry: e };
                           enriched._id = flagId(enriched);
                           vehicleFlags.push(enriched);
                         });
