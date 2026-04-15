@@ -2980,30 +2980,15 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
     flags.push({ category: "ai", type: "warn", text: "AI uncertain", detail: `Some values may be inaccurate. Issues: ${allIssues.join(", ") || "partially unclear"}` });
   }
 
-  // Fleet card mistake flags — surface as distinct line items in AI review
-  // so admins can spot/fix card misreads independently of receipt issues.
+  // Fleet card mistake flag — only flag when the card TEXT read is itself
+  // uncertain. Card/rego mismatch is NOT an error (many drivers share cards),
+  // so we deliberately do not flag mismatches here.
   if (entry._cardConfidence === "low") {
     flags.push({
       category: "ai",
-      type: "danger",
-      text: "Fleet card unclear",
-      detail: `Scanner could not read the fleet card clearly (AI saw card "${entry._cardOriginalCard || "?"}"${entry._cardOriginalRego ? `, rego "${entry._cardOriginalRego}"` : ""}). Verify card number and rego.`,
-    });
-  }
-  if (Array.isArray(entry._cardConfusable) && entry._cardConfusable.length > 0) {
-    flags.push({
-      category: "ai",
       type: "warn",
-      text: "Similar regos detected on card",
-      detail: `The fleet card read is easily confused with: ${entry._cardConfusable.join(", ")}. Double-check the vehicle.`,
-    });
-  }
-  if (entry._cardCorrected) {
-    flags.push({
-      category: "ai",
-      type: "info",
-      text: "Fleet card auto-corrected",
-      detail: `AI originally read card "${entry._cardOriginalCard || "?"}"${entry._cardOriginalRego ? `, rego "${entry._cardOriginalRego}"` : ""} — auto-corrected using previously learned mapping.`,
+      text: "Fleet card unclear",
+      detail: `Scanner wasn't confident reading the fleet card number (AI saw "${entry._cardOriginalCard || "?"}"). Verify and correct if needed.`,
     });
   }
 
@@ -3013,20 +2998,13 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
     flags.push({ category: "ai", type: "warn", text: "Unusual rego format", detail: `"${rego}" — expected 4-8 characters` });
   }
 
-  // Card/rego mismatch — either a known exception (info) or a potential scan
-  // mistake the admin should review (warn).
+  // Known card/rego exception — informational only. Mismatches are NOT
+  // treated as errors because fleet cards are often shared between vehicles.
   const cardRego = entry.cardRego || entry.fleetCardVehicle || "";
   if (cardRego && rego && cardRego.toUpperCase().replace(/\s+/g, "") !== rego.toUpperCase().replace(/\s+/g, "")) {
     const exception = isKnownCardRegoException(cardRego, rego);
     if (exception) {
       flags.push({ category: "ai", type: "info", text: "Known card/rego exception", detail: `${exception.driver}: card embossed "${exception.cardRego}" but vehicle is "${exception.vehicleRego}" — ${exception.reason}` });
-    } else {
-      flags.push({
-        category: "ai",
-        type: "warn",
-        text: "Card rego doesn't match vehicle",
-        detail: `Fleet card embossed "${cardRego}" but entry rego is "${rego}" — possible card or rego misread.`,
-      });
     }
   }
 
