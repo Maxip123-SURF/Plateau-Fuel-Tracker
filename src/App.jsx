@@ -2261,6 +2261,7 @@ function FieldInput({ label, value, onChange, placeholder, type = "text", requir
       <input
         type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
         inputMode={type === "number" ? "decimal" : undefined}
+        step={type === "number" ? "any" : undefined}
         style={{
           width: "100%", background: "white", border: "1px solid #e2e8f0",
           borderRadius: 8, padding: "9px 12px", color: "#0f172a", fontSize: 14,
@@ -2914,6 +2915,22 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
           }}>Delete</button>
           <div style={{ flex: 1 }}>
             <PrimaryBtn onClick={() => {
+              // Parse numeric inputs preserving zeros and decimals.
+              // parseFloat("") → NaN → null; parseFloat("0") → 0 (not null).
+              const numOrNull = (v) => {
+                if (v === null || v === undefined) return null;
+                const s = String(v).trim();
+                if (s === "") return null;
+                const n = parseFloat(s);
+                return Number.isFinite(n) ? n : null;
+              };
+              const intOrNull = (v) => {
+                if (v === null || v === undefined) return null;
+                const s = String(v).trim();
+                if (s === "") return null;
+                const n = parseInt(s, 10);
+                return Number.isFinite(n) ? n : null;
+              };
               if (entryType === "other") {
                 // Build "Oil & Others" entry — strip vehicle-only fields
                 const isProduct = subType === "product";
@@ -2929,10 +2946,10 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
                   notes: f.notes.trim(),
                   division: f.division || "Tree",
                   // Product = quantity+cost; Fuel = litres+ppl+cost
-                  litres: isProduct ? null : (parseFloat(f.litres) || null),
-                  pricePerLitre: isProduct ? null : (parseFloat(f.pricePerLitre) || null),
-                  quantity: isProduct ? (parseInt(f.quantity) || null) : null,
-                  totalCost: parseFloat(f.totalCost) || null,
+                  litres: isProduct ? null : numOrNull(f.litres),
+                  pricePerLitre: isProduct ? null : numOrNull(f.pricePerLitre),
+                  quantity: isProduct ? intOrNull(f.quantity) : null,
+                  totalCost: numOrNull(f.totalCost),
                   fuelType: f.equipment.trim(),
                   fleetCardNumber: f.fleetCardNumber || entry.fleetCardNumber || "",
                   cardRego: f.cardRego || entry.cardRego || "",
@@ -2950,10 +2967,10 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
                   driverName: f.driverName.trim(),
                   registration: f.registration.trim().toUpperCase(),
                   date: f.date.trim(),
-                  odometer: parseFloat(f.odometer) || null,
-                  litres: parseFloat(f.litres) || null,
-                  pricePerLitre: parseFloat(f.pricePerLitre) || null,
-                  totalCost: parseFloat(f.totalCost) || null,
+                  odometer: numOrNull(f.odometer),
+                  litres: numOrNull(f.litres),
+                  pricePerLitre: numOrNull(f.pricePerLitre),
+                  totalCost: numOrNull(f.totalCost),
                   station: f.station.trim(),
                   fuelType: f.fuelType.trim(),
                   division: f.division,
@@ -11507,7 +11524,22 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       {editingEntry && (
         <EditEntryModal
           entry={editingEntry}
-          onSave={(updated) => { updateEntry(updated); setEditingEntry(null); }}
+          onSave={(updated) => {
+            updateEntry(updated);
+            // Auto-resolve all open flags attached to this entry — editing
+            // the entry means the admin has addressed the issue.
+            try {
+              const flagsForEntry = fleetAnalysis
+                .flatMap(v => v.flags || [])
+                .filter(fl => fl._entryId === updated.id)
+                .map(fl => flagId(fl))
+                .filter(fid => !resolvedFlags[fid]);
+              if (flagsForEntry.length > 0) {
+                resolveFlagsBulk(flagsForEntry, "Auto-resolved: entry edited", "Admin");
+              }
+            } catch (_) { /* non-fatal */ }
+            setEditingEntry(null);
+          }}
           onDelete={(id) => { deleteEntry(id); setEditingEntry(null); }}
           onClose={() => setEditingEntry(null)}
           loadReceiptFn={loadReceiptImage}
