@@ -10873,10 +10873,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       return dt.getFullYear() === filterYear && dt.getMonth() + 1 === filterMonth;
     });
 
-    // Group by fleet card rego (vehicle registration on the card)
+    // Group by fleet card rego (the registration embossed on the physical card)
     const byRego = {};
     monthEntries.forEach(e => {
-      const rego = (e.cardRego || e.registration || (e.entryType === "other" ? e.equipment : "") || "").trim().toUpperCase();
+      const rego = (e.cardRego || "").trim().toUpperCase();
       if (!rego) return;
       if (!byRego[rego]) byRego[rego] = { rego, entries: [], totalLitres: 0, totalCost: 0, drivers: new Set(), cards: new Set() };
       byRego[rego].entries.push(e);
