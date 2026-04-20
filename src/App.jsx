@@ -1466,6 +1466,65 @@ function smartMatchLinesToVehicles(vehicles, fuelLines) {
   return matches;
 }
 
+// Reconcile learned card mappings with the current static DB.
+// Admin edits to DRIVER_CARDS / REGO_DB (source code) or to the "Learned Card
+// Corrections" admin section must flow into the learning system — otherwise a
+// stale mapping will override the corrected DB on every scan (because the
+// learned layer is checked BEFORE the static DB in fuzzyMatchFleetCard).
+//
+// For each learned mapping, we look up what the static DB currently says for
+// its `correctRego`. If the DB's card number differs from the mapping's
+// remembered `correctCard`, we update the mapping in place — preserving the
+// valuable "AI misread pattern" learning but refreshing the card target to
+// match admin's authoritative edit.
+//
+// Returns { reconciled, changed } where `changed` is the number of mappings
+// that were updated. Pure function — no side effects.
+function reconcileCardMappingsWithDB(mappings) {
+  if (!mappings || typeof mappings !== "object") return { reconciled: {}, changed: 0 };
+  const keys = Object.keys(mappings);
+  if (keys.length === 0) return { reconciled: mappings, changed: 0 };
+
+  // Build rego → canonical card lookup. DRIVER_CARDS wins when both sources
+  // list a rego (it's the curated primary list); REGO_DB fills in the rest.
+  const regoToCard = {};
+  DRIVER_CARDS.forEach(d => {
+    if (!d.r || !d.c) return;
+    const r = d.r.toUpperCase().replace(/\s+/g, "");
+    const c = d.c.replace(/\s/g, "");
+    if (c.length >= 16 && !c.includes("*")) regoToCard[r] = c;
+  });
+  REGO_DB.forEach(v => {
+    if (!v.r || !v.c) return;
+    const r = v.r.toUpperCase().replace(/\s+/g, "");
+    const c = v.c.replace(/\s/g, "");
+    if (c.length >= 16 && !c.includes("*") && !regoToCard[r]) regoToCard[r] = c;
+  });
+
+  const reconciled = {};
+  let changed = 0;
+  for (const [key, m] of Object.entries(mappings)) {
+    const correctRego = (m?.correctRego || "").toUpperCase().replace(/\s+/g, "");
+    const staticCard = correctRego ? regoToCard[correctRego] : null;
+    if (staticCard) {
+      const cleanLearned = (m.correctCard || "").replace(/\s/g, "");
+      if (cleanLearned !== staticCard) {
+        console.log(`[Card Learning] Reconciling ${correctRego}: learned card ${cleanLearned || "(none)"} → DB card ${staticCard}`);
+        reconciled[key] = {
+          ...m,
+          correctCard: staticCard,
+          _reconciledAt: new Date().toISOString(),
+          _prevCorrectCard: cleanLearned || null,
+        };
+        changed++;
+        continue;
+      }
+    }
+    reconciled[key] = m;
+  }
+  return { reconciled, changed };
+}
+
 function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMappings) {
   if (!scannedCard && !scannedRego) return { cardNumber: null, vehicleOnCard: null };
 
@@ -3642,10 +3701,20 @@ export default function App() {
         if (kRes?.value) { setApiKey(kRes.value); setApiKeyInput(kRes.value); }
         if (lRes?.value) setLearnedDB(JSON.parse(lRes.value));
         if (pRes?.value) { setAdminPasscode(pRes.value); setPasscodeInput(pRes.value); }
-        // Load learned card corrections
+        // Load learned card corrections + reconcile with current static DB
+        // (admin edits to DRIVER_CARDS/REGO_DB must override stale learned values)
         try {
           const cmRes = await window.storage.get("fuel_learned_card_mappings");
-          if (cmRes?.value) setLearnedCardMappings(JSON.parse(cmRes.value));
+          if (cmRes?.value) {
+            const loaded = JSON.parse(cmRes.value);
+            const { reconciled, changed } = reconcileCardMappingsWithDB(loaded);
+            setLearnedCardMappings(reconciled);
+            if (changed > 0) {
+              try { await window.storage.set("fuel_learned_card_mappings", JSON.stringify(reconciled)); } catch (_) {}
+              db.saveSetting("learned_card_mappings", JSON.stringify(reconciled)).catch(() => {});
+              console.log(`[Card Learning] Reconciled ${changed} learned mapping(s) against static DB on local load`);
+            }
+          }
         } catch (_) {}
         // Load learned corrections (self-learning system)
         try {
@@ -3669,9 +3738,20 @@ export default function App() {
           if (cloudApiKey) { setApiKey(cloudApiKey); setApiKeyInput(cloudApiKey); }
           // Load fleet card transactions
           db.loadFleetCardTransactions().then(txns => { if (txns?.length) setFleetCardTxns(txns); }).catch(() => {});
-          // Load learned card corrections from cloud
+          // Load learned card corrections from cloud + reconcile with static DB
           db.loadSetting("learned_card_mappings").then(raw => {
-            if (raw) { try { setLearnedCardMappings(JSON.parse(raw)); } catch (_) {} }
+            if (raw) {
+              try {
+                const loaded = JSON.parse(raw);
+                const { reconciled, changed } = reconcileCardMappingsWithDB(loaded);
+                setLearnedCardMappings(reconciled);
+                if (changed > 0) {
+                  window.storage.set("fuel_learned_card_mappings", JSON.stringify(reconciled)).catch(() => {});
+                  db.saveSetting("learned_card_mappings", JSON.stringify(reconciled)).catch(() => {});
+                  console.log(`[Card Learning] Reconciled ${changed} learned mapping(s) against static DB on cloud load`);
+                }
+              } catch (_) {}
+            }
           }).catch(() => {});
           // Load learned corrections (self-learning system) from cloud
           db.loadSetting("learned_corrections").then(raw => {
@@ -3913,12 +3993,16 @@ export default function App() {
     showToast(`Resolved ${fids.length} issue${fids.length === 1 ? "" : "s"}`);
   };
 
-  // Persist learned card mappings to local + cloud storage
+  // Persist learned card mappings to local + cloud storage.
+  // Always reconcile against the current static DB on write so admin edits
+  // (via Cards tab × / Clear All, or any future admin card-editing UI)
+  // immediately flow through to the correct card numbers.
   const persistCardMappings = async (newMappings) => {
-    learnedCardMappingsRef.current = newMappings;
-    setLearnedCardMappings(newMappings);
-    try { await window.storage.set("fuel_learned_card_mappings", JSON.stringify(newMappings)); } catch (_) {}
-    db.saveSetting("learned_card_mappings", JSON.stringify(newMappings)).catch(() => {});
+    const { reconciled } = reconcileCardMappingsWithDB(newMappings || {});
+    learnedCardMappingsRef.current = reconciled;
+    setLearnedCardMappings(reconciled);
+    try { await window.storage.set("fuel_learned_card_mappings", JSON.stringify(reconciled)); } catch (_) {}
+    db.saveSetting("learned_card_mappings", JSON.stringify(reconciled)).catch(() => {});
   };
 
   // ── Self-learning correction system ────────────────────────────────────────
