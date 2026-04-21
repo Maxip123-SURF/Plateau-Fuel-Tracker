@@ -11605,22 +11605,54 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     };
 
     // ── Build aligned rows ──────────────────────────────────────────────
-    // Each row is {txn, group, status, diff}. Matched/scan_error pairs have
-    // both sides filled; missing has only txn; app_only has only group.
+    // Each matched/scan_error pair contributes one row per split entry (so
+    // every split is individually editable). The FleetCard txn only renders
+    // on the FIRST row of the group (splitIdx === 0); continuation rows
+    // show a slim "↳ same txn (N of M)" placeholder so both tables stay
+    // index-aligned side-by-side.
     const alignedRows = [];
-    for (const r of results) alignedRows.push(r);
-    for (const g of appOnlyGroups) alignedRows.push({ txn: null, group: g, status: "app_only", diff: null });
+    const pushResultRows = (r) => {
+      const groupSplits = (r.group?.entries && r.group.entries.length > 1) ? r.group.entries : null;
+      if (groupSplits) {
+        groupSplits.forEach((entry, idx) => {
+          alignedRows.push({
+            txn: r.txn, group: r.group, entry,
+            splitIdx: idx, splitTotal: groupSplits.length,
+            status: r.status, diff: r.diff,
+          });
+        });
+      } else {
+        alignedRows.push({
+          txn: r.txn, group: r.group,
+          entry: r.group?.entries?.[0] || null,
+          splitIdx: 0, splitTotal: r.group?.entries?.length || 1,
+          status: r.status, diff: r.diff,
+        });
+      }
+    };
+    for (const r of results) pushResultRows(r);
+    for (const g of appOnlyGroups) pushResultRows({ txn: null, group: g, status: "app_only", diff: null });
+
+    // Sort by date/time/rego, keeping splits of the same group adjacent. We
+    // sort by the group's first-split sort key, then splitIdx within group.
+    const sortKey = (r) => {
+      const d = parseDate(r.txn?.date || r.group?.date) || 0;
+      const t = r.txn?.time || "";
+      const rego = r.txn?.rego || r.group?.registration || "";
+      const groupId = r.group?.key || r.txn?.id || "";
+      return { d, t, rego, groupId };
+    };
     alignedRows.sort((a, b) => {
-      const dA = parseDate(a.txn?.date || a.group?.date) || 0;
-      const dB = parseDate(b.txn?.date || b.group?.date) || 0;
-      if (dA !== dB) return dA - dB;
-      const tA = a.txn?.time || "";
-      const tB = b.txn?.time || "";
-      if (tA !== tB) return tA.localeCompare(tB);
-      return (a.txn?.rego || a.group?.registration || "").localeCompare(b.txn?.rego || b.group?.registration || "");
+      const A = sortKey(a), B = sortKey(b);
+      if (A.d !== B.d) return A.d - B.d;
+      if (A.t !== B.t) return A.t.localeCompare(B.t);
+      if (A.rego !== B.rego) return A.rego.localeCompare(B.rego);
+      if (A.groupId !== B.groupId) return A.groupId.localeCompare(B.groupId);
+      return (a.splitIdx || 0) - (b.splitIdx || 0);
     });
-    // Apply filter + search to the aligned list (same predicates, but now
-    // also considering app-only side matches)
+
+    // Apply filter + search. Splits inherit their group's status so filtering
+    // by e.g. "scan_error" keeps every split of a scan_error group visible.
     const displayRows = alignedRows.filter(r => {
       if (reconFilter !== "all" && r.status !== reconFilter) return false;
       if (!searchTerm) return true;
@@ -11629,18 +11661,17 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         (r.txn?.cardNumber || "").includes(searchTerm) ||
         (r.txn?.driver || "").toUpperCase().includes(searchTerm) ||
         (r.txn?.station || "").toUpperCase().includes(searchTerm) ||
-        (r.group?.registration || "").toUpperCase().includes(searchTerm) ||
-        (r.group?.driverName || "").toUpperCase().includes(searchTerm) ||
-        normalizeCardNum(r.group?.fleetCardNumber).includes(searchTerm)
+        (r.entry?.registration || "").toUpperCase().includes(searchTerm) ||
+        (r.entry?.driverName || "").toUpperCase().includes(searchTerm) ||
+        (r.entry?.station || "").toUpperCase().includes(searchTerm) ||
+        normalizeCardNum(r.entry?.fleetCardNumber).includes(searchTerm)
       );
     });
 
-    // Uniform row height so the two tables visually align side-by-side. Split
-    // groups expand to accommodate the extra rows without breaking alignment
-    // (we use a matching blank-row block on the opposite side — see below).
-    const BASE_ROW_H = 44;
+    // Uniform row height so the two tables visually align side-by-side.
+    const BASE_ROW_H = 40;
     const cellStyle = {
-      padding: "2px 4px",
+      padding: "0 2px",
       fontSize: 11,
       color: "#0f172a",
       verticalAlign: "middle",
@@ -11649,7 +11680,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     };
     const inputStyle = {
       width: "100%",
-      padding: "4px 6px",
+      padding: "6px 6px",
       fontSize: 11,
       border: "1px solid transparent",
       background: "transparent",
@@ -11657,16 +11688,24 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       fontFamily: "inherit",
       color: "#0f172a",
       outline: "none",
+      cursor: "text",
+      transition: "background 0.1s, border-color 0.1s",
+    };
+    // Hover affordance — subtle dotted underline hint + light grey background
+    // so every editable cell telegraphs "click me". Focus ups the contrast.
+    const hoverCellStyle = (e) => {
+      if (document.activeElement === e.target) return;
+      e.target.style.background = "#f8fafc";
+      e.target.style.borderColor = "#e2e8f0";
     };
     const focusCellStyle = (e) => { e.target.style.background = "white"; e.target.style.borderColor = "#93c5fd"; };
     const blurCellStyle = (e) => { e.target.style.background = "transparent"; e.target.style.borderColor = "transparent"; };
 
-    // Editable cell component — uncontrolled (defaultValue) so we don't
-    // re-render on every keystroke. Commits on blur + Enter.
-    const EditCell = ({ value, onCommit, align = "left", width, readOnly = false, placeholder = "", type = "text" }) => (
-      <td style={{ ...cellStyle, textAlign: align, width }}>
+    // Editable cell — uncontrolled input, commits on blur + Enter, Esc reverts.
+    const EditCell = ({ value, onCommit, align = "left", width, readOnly = false, placeholder = "", type = "text", title }) => (
+      <td style={{ ...cellStyle, textAlign: align, width }} title={title || (readOnly ? undefined : "Click to edit")}>
         {readOnly ? (
-          <span style={{ padding: "4px 6px", display: "inline-block" }}>{value ?? ""}</span>
+          <span style={{ padding: "6px 6px", display: "inline-block", color: "#64748b" }}>{value ?? ""}</span>
         ) : (
           <input
             key={value ?? ""}
@@ -11674,6 +11713,8 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             defaultValue={value ?? ""}
             placeholder={placeholder}
             onFocus={focusCellStyle}
+            onMouseEnter={hoverCellStyle}
+            onMouseLeave={(e) => { if (document.activeElement !== e.target) blurCellStyle(e); }}
             onBlur={(e) => { blurCellStyle(e); if (e.target.value !== String(value ?? "")) onCommit(e.target.value); }}
             onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { e.target.value = value ?? ""; e.target.blur(); } }}
             style={{ ...inputStyle, textAlign: align }}
@@ -11828,17 +11869,18 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                     <span style={{ fontWeight: 500, color: "#94a3b8" }}>{fuelTxns.length} fuel txn{fuelTxns.length !== 1 ? "s" : ""}</span>
                   </div>
                   <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
                       <thead>
                         <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
                           <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 22 }}></th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 84 }}>Date</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 66 }}>Rego</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 76 }}>Date</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 48 }}>Time</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 64 }}>Rego</th>
                           <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Station</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 84 }}>Product</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 60, textAlign: "right" }}>L</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 56, textAlign: "right" }}>$/L</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 72, textAlign: "right" }}>Total</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 78 }}>Product</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 58, textAlign: "right" }}>L</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 52, textAlign: "right" }}>$/L</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 70, textAlign: "right" }}>Total</th>
                           <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 24 }}></th>
                         </tr>
                       </thead>
@@ -11846,20 +11888,38 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                         {displayRows.map((r, i) => {
                           const st = statusStyle[r.status] || statusStyle.matched;
                           const rowBg = i % 2 === 0 ? st.bg : st.bgAlt;
+                          // App-only row: txn missing
                           if (!r.txn) {
-                            // App-only: render a placeholder row so the right table can still render the group on the same row index.
                             return (
                               <tr key={`L-${i}`} style={{ height: BASE_ROW_H, background: rowBg }}>
                                 <td style={{ ...cellStyle, textAlign: "center", color: st.text, fontWeight: 700 }} title={st.title}>{st.label}</td>
-                                <td colSpan={8} style={{ ...cellStyle, color: "#94a3b8", fontStyle: "italic" }}>— no transaction in report —</td>
+                                <td colSpan={9} style={{ ...cellStyle, color: "#94a3b8", fontStyle: "italic", padding: "0 8px" }}>— no transaction in report —</td>
+                              </tr>
+                            );
+                          }
+                          // Continuation row for a split group (splitIdx > 0) — show
+                          // a slim "↳ same txn (N of M)" indicator so left and right
+                          // tables stay aligned. Only the first split renders the
+                          // actual txn data.
+                          if (r.splitIdx > 0) {
+                            return (
+                              <tr key={`L-${i}`} style={{ height: BASE_ROW_H, background: rowBg }}>
+                                <td style={{ ...cellStyle, textAlign: "center", color: st.text, fontWeight: 700, opacity: 0.5 }}>{st.label}</td>
+                                <td colSpan={9} style={{ ...cellStyle, color: "#94a3b8", fontStyle: "italic", padding: "0 8px" }}>
+                                  {"\u21B3"} same transaction (split {r.splitIdx + 1} of {r.splitTotal})
+                                </td>
                               </tr>
                             );
                           }
                           const t = r.txn;
                           return (
                             <tr key={`L-${i}`} style={{ height: BASE_ROW_H, background: rowBg }}>
-                              <td style={{ ...cellStyle, textAlign: "center", color: st.text, fontWeight: 700 }} title={st.title}>{st.label}</td>
+                              <td style={{ ...cellStyle, textAlign: "center", color: st.text, fontWeight: 700 }} title={st.title}>
+                                {st.label}
+                                {r.splitTotal > 1 && <div style={{ fontSize: 8, color: st.text, fontWeight: 600, marginTop: 1 }}>{r.splitTotal}×</div>}
+                              </td>
                               <EditCell value={t.date} onCommit={v => saveTxnEdit(t.id, "date", v)} />
+                              <EditCell value={t.time} onCommit={v => saveTxnEdit(t.id, "time", v)} />
                               <EditCell value={t.rego} onCommit={v => saveTxnEdit(t.id, "rego", v)} />
                               <EditCell value={t.station} onCommit={v => saveTxnEdit(t.id, "station", v)} />
                               <EditCell value={t.product} onCommit={v => saveTxnEdit(t.id, "product", v)} />
@@ -11890,80 +11950,75 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                     <span style={{ fontWeight: 500, color: "#94a3b8" }}>{receiptGroups.length} receipt{receiptGroups.length !== 1 ? "s" : ""}</span>
                   </div>
                   <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
                       <thead>
                         <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
                           <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 22 }}></th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 66 }}>Rego</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 76 }}>Date</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 64 }}>Rego</th>
                           <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Driver</th>
                           <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Station</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 64 }}>Fuel</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 60, textAlign: "right" }}>L</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 56, textAlign: "right" }}>$/L</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 72, textAlign: "right" }}>Total</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 56, textAlign: "center" }}>View</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 62 }}>Fuel</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 58, textAlign: "right" }}>L</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 52, textAlign: "right" }}>$/L</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 70, textAlign: "right" }}>Total</th>
+                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 36, textAlign: "center" }}></th>
                         </tr>
                       </thead>
                       <tbody>
                         {displayRows.map((r, i) => {
                           const st = statusStyle[r.status] || statusStyle.matched;
                           const rowBg = i % 2 === 0 ? st.bg : st.bgAlt;
-                          if (!r.group) {
+                          // Missing-receipt row: txn present, no group/entry
+                          if (!r.group || !r.entry) {
                             return (
                               <tr key={`R-${i}`} style={{ height: BASE_ROW_H, background: rowBg }}>
                                 <td style={{ ...cellStyle, textAlign: "center", color: st.text, fontWeight: 700 }} title={st.title}>{st.label}</td>
-                                <td colSpan={8} style={{ ...cellStyle, color: "#94a3b8", fontStyle: "italic" }}>
+                                <td colSpan={9} style={{ ...cellStyle, color: "#94a3b8", fontStyle: "italic", padding: "0 8px" }}>
                                   — no receipt lodged{r.txn?.driver ? ` · follow up with ${r.txn.driver}` : ""} —
                                 </td>
                               </tr>
                             );
                           }
-                          const g = r.group;
-                          const isMerged = g.entries.length > 1;
-                          const only = g.entries[0];
-                          // For merged groups: totals are read-only; cells reflect the SUM. Per-split edits via the 📝 Edit button.
+                          // Individually editable split entry
+                          const e = r.entry;
+                          const isScanErrorLast = r.status === "scan_error" && r.splitIdx === r.splitTotal - 1;
                           return (
                             <tr key={`R-${i}`} style={{ height: BASE_ROW_H, background: rowBg }}>
                               <td style={{ ...cellStyle, textAlign: "center", color: st.text, fontWeight: 700 }} title={st.title}>
                                 {st.label}
-                                {isMerged && <div style={{ fontSize: 8, color: st.text, fontWeight: 600, marginTop: 1 }}>{g.entries.length}×</div>}
+                                {r.splitTotal > 1 && <div style={{ fontSize: 8, color: st.text, fontWeight: 600, marginTop: 1 }}>{r.splitIdx + 1}/{r.splitTotal}</div>}
                               </td>
-                              {isMerged ? (
-                                <>
-                                  <EditCell value={g.registration} readOnly />
-                                  <EditCell value={g.driverName} readOnly />
-                                  <EditCell value={g.station} readOnly />
-                                  <td style={{ ...cellStyle, color: "#64748b", fontStyle: "italic" }}>mixed</td>
-                                  <td style={{ ...cellStyle, textAlign: "right", fontWeight: 500 }}>{g.totalLitres ? g.totalLitres.toFixed(2) : ""}</td>
-                                  <td style={{ ...cellStyle, textAlign: "right", color: "#94a3b8" }}>{"\u2014"}</td>
-                                  <td style={{ ...cellStyle, textAlign: "right", fontWeight: 700 }}>
-                                    {"$" + g.totalCost.toFixed(2)}
-                                    {r.status === "scan_error" && r.diff != null && (
-                                      <div style={{ fontSize: 9, color: "#b45309" }}>Δ ${r.diff.toFixed(2)}</div>
-                                    )}
-                                  </td>
-                                </>
-                              ) : only ? (
-                                <>
-                                  <EditCell value={only.registration} onCommit={v => saveEntryEdit(only.id, "registration", v)} />
-                                  <EditCell value={only.driverName} onCommit={v => saveEntryEdit(only.id, "driverName", v)} />
-                                  <EditCell value={only.station} onCommit={v => saveEntryEdit(only.id, "station", v)} />
-                                  <EditCell value={only.fuelType} onCommit={v => saveEntryEdit(only.id, "fuelType", v)} />
-                                  <EditCell value={only.litres} onCommit={v => saveEntryEdit(only.id, "litres", v)} align="right" />
-                                  <EditCell value={only.pricePerLitre} onCommit={v => saveEntryEdit(only.id, "pricePerLitre", v)} align="right" />
-                                  <EditCell value={only.totalCost != null ? only.totalCost.toFixed(2) : ""} onCommit={v => saveEntryEdit(only.id, "totalCost", v)} align="right" />
-                                </>
-                              ) : null}
-                              {/* Actions: view receipt, edit full entry */}
+                              <EditCell value={e.date} onCommit={v => saveEntryEdit(e.id, "date", v)} />
+                              <EditCell value={e.registration} onCommit={v => saveEntryEdit(e.id, "registration", v)} />
+                              <EditCell value={e.driverName} onCommit={v => saveEntryEdit(e.id, "driverName", v)} />
+                              <EditCell value={e.station} onCommit={v => saveEntryEdit(e.id, "station", v)} />
+                              <EditCell value={e.fuelType} onCommit={v => saveEntryEdit(e.id, "fuelType", v)} />
+                              <EditCell value={e.litres} onCommit={v => saveEntryEdit(e.id, "litres", v)} align="right" />
+                              <EditCell value={e.pricePerLitre} onCommit={v => saveEntryEdit(e.id, "pricePerLitre", v)} align="right" />
+                              <td style={{ ...cellStyle, textAlign: "right", padding: "0 2px", position: "relative" }}>
+                                <input
+                                  key={e.totalCost ?? ""}
+                                  type="text"
+                                  defaultValue={e.totalCost != null ? e.totalCost.toFixed(2) : ""}
+                                  onFocus={focusCellStyle}
+                                  onMouseEnter={hoverCellStyle}
+                                  onMouseLeave={(ev) => { if (document.activeElement !== ev.target) blurCellStyle(ev); }}
+                                  onBlur={(ev) => { blurCellStyle(ev); if (ev.target.value !== String(e.totalCost != null ? e.totalCost.toFixed(2) : "")) saveEntryEdit(e.id, "totalCost", ev.target.value); }}
+                                  onKeyDown={(ev) => { if (ev.key === "Enter") ev.target.blur(); if (ev.key === "Escape") { ev.target.value = e.totalCost != null ? e.totalCost.toFixed(2) : ""; ev.target.blur(); } }}
+                                  style={{ ...inputStyle, textAlign: "right" }}
+                                  title="Click to edit"
+                                />
+                                {isScanErrorLast && r.diff != null && (
+                                  <div style={{ fontSize: 9, color: "#b45309", fontWeight: 700, marginTop: -2, paddingRight: 6 }}>Δ ${r.diff.toFixed(2)}</div>
+                                )}
+                              </td>
                               <td style={{ ...cellStyle, textAlign: "center", whiteSpace: "nowrap" }}>
-                                {only?.hasReceipt && (
-                                  <button onClick={() => setViewingReceipt(only.id)} title="View receipt image" style={{
-                                    background: "none", border: "none", color: "#16a34a", cursor: "pointer", fontSize: 13, padding: "2px 3px",
+                                {e.hasReceipt && (
+                                  <button onClick={() => setViewingReceipt(e.id)} title="View receipt image" style={{
+                                    background: "none", border: "none", color: "#16a34a", cursor: "pointer", fontSize: 14, padding: "2px 3px",
                                   }}>{"\uD83D\uDCC4"}</button>
                                 )}
-                                <button onClick={() => setEditingEntry(isMerged ? g.entries[0] : only)} title={isMerged ? "Edit the first split (use Data tab for the rest)" : "Edit full entry"} style={{
-                                  background: "none", border: "none", color: "#7c3aed", cursor: "pointer", fontSize: 11, padding: "2px 3px", marginLeft: 2,
-                                }}>{"\u270E"}</button>
                               </td>
                             </tr>
                           );
