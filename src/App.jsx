@@ -2208,7 +2208,11 @@ const css = `
 `;
 
 function Toast({ msg, type, onDone }) {
-  useEffect(() => { const t = setTimeout(onDone, 3000); return () => clearTimeout(t); }, [onDone]);
+  // Dep array includes msg/type so a new toast replacing an old one resets
+  // the timer. The parent passes a stable onDone via useCallback so this
+  // effect doesn't re-fire on every unrelated re-render (which previously
+  // caused toasts to linger indefinitely during active UI changes).
+  useEffect(() => { const t = setTimeout(onDone, 3000); return () => clearTimeout(t); }, [onDone, msg, type]);
   const colors = type === "error" || type === "danger" ? { bg: "#fef2f2", border: "#fca5a5", text: "#b91c1c", icon: "\u26A0" }
     : type === "warn" ? { bg: "#fffbeb", border: "#fcd34d", text: "#b45309", icon: "\u26A0" }
     : { bg: "#f0fdf4", border: "#86efac", text: "#15803d", icon: "\u2713" };
@@ -2573,13 +2577,18 @@ function EditVehicleModal({ rego, currentDivision, currentType, currentName, ent
 function ReceiptViewer({ entryId, entry, loadFn, onClose }) {
   const [img, setImg] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Cancellation flag mirrors the InlineReceipt pattern below — without it a
+  // slow receipt A load that resolves AFTER the user closes and opens receipt
+  // B would overwrite B's image (or setState on an unmounted component).
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setImg(null);
     (async () => {
-      setLoading(true);
       const data = await loadFn(entryId);
-      setImg(data);
-      setLoading(false);
+      if (!cancelled) { setImg(data); setLoading(false); }
     })();
+    return () => { cancelled = true; };
   }, [entryId, loadFn]);
   return (
     <div style={{
@@ -3625,7 +3634,10 @@ export default function App() {
     }
   };
 
-  const loadReceiptImage = async (entryId) => {
+  // Stable identity so child modals (ReceiptViewer, EditEntryModal, etc.)
+  // don't re-run their receipt-fetch effect on every parent re-render. All
+  // dependencies the function actually uses are refs, so empty deps are safe.
+  const loadReceiptImage = useCallback(async (entryId) => {
     try {
       const entry = entriesRef.current.find(e => e.id === entryId);
       // Check for database-stored receipt
@@ -3666,7 +3678,7 @@ export default function App() {
       }
       return null;
     } catch (_) { return null; }
-  };
+  }, []);
 
   const deleteReceiptImage = async (entryId) => {
     try {
@@ -3683,10 +3695,19 @@ export default function App() {
 
   const receiptRef = useRef();
   const scanResultsRef = useRef();
+  // scanIdRef guards all RECEIPT scans (initial upload, rotate, re-scan) so a
+  // stale async result from a superseded scan can never overwrite the latest
+  // one. cardScanIdRef does the same for CARD-only uploads, kept separate so
+  // uploading a card mid-receipt-scan doesn't invalidate the in-flight receipt.
   const scanIdRef = useRef(0);
+  const cardScanIdRef = useRef(0);
   const cardRef = useRef();
 
   const showToast = useCallback((msg, type = "success") => setToast({ msg, type }), []);
+  // Stable identity so Toast's auto-dismiss effect doesn't reset every parent
+  // re-render — passing an inline `() => setToast(null)` made the timer
+  // restart continuously and toasts never faded out.
+  const dismissToast = useCallback(() => setToast(null), []);
 
   // ── Storage ───────────────────────────────────────────────────────────────
   // On app load: try to fetch data from Supabase (cloud) first.
@@ -4828,14 +4849,19 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
 
   const rotateAndRescan = async (newRotation) => {
     if (!receiptFile || !apiKey) return;
+    // Increment shared receipt scanId so any in-flight scan from a previous
+    // rotation/upload/rescan is abandoned before it can overwrite new state.
+    const currentScanId = ++scanIdRef.current;
     setReceiptRotation(newRotation);
     setReceiptScanning(true); setError(""); setReceiptData(null); setCardData(null); setReviewConfirmed(false);
     try {
       const { b64, mime } = await compressImage(receiptFile, newRotation);
+      if (scanIdRef.current !== currentScanId) return;
       setReceiptB64(b64);
       setReceiptMime(mime);
       setReceiptPreview(`data:${mime};base64,${b64}`);
       const result = await claudeScan(apiKey, b64, mime, buildReceiptScanPrompt());
+      if (scanIdRef.current !== currentScanId) return;
       const normalized = normalizeReceiptData(result, learnedCorrectionsRef.current);
       setReceiptData(normalized);
       setAiScanSnapshot(JSON.parse(JSON.stringify(normalized)));
@@ -4855,16 +4881,26 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
           setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
         }
       }
-    } catch (e) { setError("Rotate/scan failed \u2014 " + e.message); }
+    } catch (e) {
+      if (scanIdRef.current !== currentScanId) return;
+      setError("Rotate/scan failed \u2014 " + e.message);
+    }
+    // Only clear the scanning flag if WE are still the latest scan — otherwise
+    // the newer scan is already in progress and will toggle it itself.
+    if (scanIdRef.current !== currentScanId) return;
     setReceiptScanning(false);
     setTimeout(() => scanResultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 200);
   };
 
   const rescanReceipt = async () => {
     if (!receiptB64 || !apiKey) return;
+    // Same scanIdRef as handleReceiptFile / rotateAndRescan — a re-scan
+    // supersedes any in-flight receipt scan that came before it.
+    const currentScanId = ++scanIdRef.current;
     setReceiptScanning(true); setError("");
     try {
       const result = await claudeScan(apiKey, receiptB64, receiptMime, buildReceiptScanPrompt());
+      if (scanIdRef.current !== currentScanId) return;
       const normalized = normalizeReceiptData(result, learnedCorrectionsRef.current);
       setReceiptData(normalized);
       setAiScanSnapshot(JSON.parse(JSON.stringify(normalized)));
@@ -4884,7 +4920,11 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
           setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
         }
       }
-    } catch (e) { setError("Re-scan failed \u2014 " + e.message); }
+    } catch (e) {
+      if (scanIdRef.current !== currentScanId) return;
+      setError("Re-scan failed \u2014 " + e.message);
+    }
+    if (scanIdRef.current !== currentScanId) return;
     setReceiptScanning(false);
     setTimeout(() => scanResultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 200);
   };
@@ -4895,11 +4935,16 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     setCardPreview(URL.createObjectURL(file));
     setCardData(null);
     if (!apiKey) return;
+    // Independent card scanId so a card re-upload doesn't poison the receipt
+    // scan — but still guards against the user rapid-firing two card uploads.
+    const currentScanId = ++cardScanIdRef.current;
     setCardScanning(true); setError("");
     try {
       const { b64, mime } = await compressImage(file);
+      if (cardScanIdRef.current !== currentScanId) return;
       setCardB64(b64);
       const result = await claudeScan(apiKey, b64, mime, buildCardScanPrompt());
+      if (cardScanIdRef.current !== currentScanId) return;
       if (result?.cardNumber || result?.vehicleOnCard) {
         // Run the matcher so the card-only flow benefits from the same
         // learned-mapping and REGO_DB lookups as the combined-scan flow,
@@ -4912,7 +4957,11 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       } else {
         setCardData(null);
       }
-    } catch (e) { setError("Card scan failed \u2014 " + e.message); }
+    } catch (e) {
+      if (cardScanIdRef.current !== currentScanId) return;
+      setError("Card scan failed \u2014 " + e.message);
+    }
+    if (cardScanIdRef.current !== currentScanId) return;
     setCardScanning(false);
   };
 
@@ -12105,7 +12154,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           onCancel={() => setConfirmAction(null)}
         />
       )}
-      {toast && <Toast msg={toast.msg} type={toast.type} onDone={() => setToast(null)} />}
+      {toast && <Toast msg={toast.msg} type={toast.type} onDone={dismissToast} />}
     </div>
   );
 }
