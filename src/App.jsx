@@ -897,11 +897,13 @@ function applyLearnedCorrections(data, learnedCorrections) {
       const scannedPpl = parseFloat(data.pricePerLitre);
       if (scannedPpl > 0 && avgPrice > 0) {
         const deviation = Math.abs(scannedPpl - avgPrice) / avgPrice;
-        if (deviation > 0.5) {
-          // Price is >50% different from station average — likely misread
+        // 50% deviation was too loose — $2.00/L vs $3.00/L wouldn't flag.
+        // Fleet fuel prices rarely move more than ±15% within a few weeks at
+        // the same station, so 20% is a conservative anomaly bar.
+        if (deviation > 0.2) {
           if (!data._mathIssues) data._mathIssues = [];
           data._mathIssues.push(`Price $${scannedPpl.toFixed(3)}/L unusual for ${station} (avg $${avgPrice.toFixed(3)}/L) — check for digit misread`);
-          console.log(`[Learn] Price anomaly at "${station}": scanned $${scannedPpl.toFixed(3)} vs avg $${avgPrice.toFixed(3)}`);
+          console.log(`[Learn] Price anomaly at "${station}": scanned $${scannedPpl.toFixed(3)} vs avg $${avgPrice.toFixed(3)} (deviation ${(deviation * 100).toFixed(0)}%)`);
         }
       }
     }
@@ -918,6 +920,16 @@ function normalizeReceiptData(data, learnedCorrections) {
   console.log("totalCost:", data.totalCost, "litres:", data.litres, "pricePerLitre:", data.pricePerLitre);
   console.log("lines:", JSON.stringify(data.lines, null, 2));
   console.log("otherItems:", JSON.stringify(data.otherItems, null, 2));
+  // Capture AI's original totals BEFORE any recalculation — the phantom-line
+  // detector below needs a reference point to tell whether extra lines were
+  // hallucinated. Without this snapshot, later recalcs (AdBlue removal,
+  // discount filter) overwrite data.litres with the line-sum, making the
+  // detector compare the sum to itself (always false — dead code).
+  const aiOriginal = {
+    litres: typeof data.litres === "number" ? data.litres : null,
+    totalCost: typeof data.totalCost === "number" ? data.totalCost : null,
+    confidenceOverall: (data.confidence?.overall || "").toLowerCase(),
+  };
   // Auto-correct year misreads: if scanned date has wrong year but same day/month,
   // fix to current year (e.g. "01/04/2025" → "01/04/2026" when current year is 2026)
   if (data.date) {
@@ -1036,29 +1048,56 @@ function normalizeReceiptData(data, learnedCorrections) {
     data.litres = parseFloat(postFilterLitres.toFixed(2));
   }
 
-  // Detect phantom/duplicate lines: if total line litres far exceeds reported total, lines are wrong
-  if (data.litres && data.lines.length > 1) {
+  // Detect phantom/duplicate lines — compare against the AI's ORIGINAL
+  // reported total (not the recalculated-from-lines value, which would always
+  // equal the line sum and make this dead code). Only drop lines when an
+  // independent signal (totalCost) confirms the reported total is trustworthy;
+  // otherwise the reported total itself may be the misread, and deleting real
+  // lines would lose legitimate fuel.
+  const aiOrigTotalLitres = aiOriginal.litres;
+  const aiOrigTotalCost = aiOriginal.totalCost;
+  if (aiOrigTotalLitres && data.lines.length > 1) {
     const lineLitresSum = data.lines.reduce((s, l) => s + (l.litres || 0), 0);
-    if (lineLitresSum > data.litres * 1.5 && lineLitresSum > data.litres + 20) {
-      // AI hallucinated extra lines — keep only lines whose litres appear reasonable
-      // Sort by litres descending and try to find subset that sums close to reported total
+    if (lineLitresSum > aiOrigTotalLitres * 1.5 && lineLitresSum > aiOrigTotalLitres + 20) {
+      // Search for the best subset that sums near the reported total
       const sortedLines = [...data.lines].sort((a, b) => (b.litres || 0) - (a.litres || 0));
-      let bestSubset = [sortedLines[0]]; // at minimum keep the largest
-      let bestDiff = Math.abs((sortedLines[0]?.litres || 0) - data.litres);
-
-      // Try all combinations of 2 lines
+      let bestSubset = [sortedLines[0]];
+      let bestDiff = Math.abs((sortedLines[0]?.litres || 0) - aiOrigTotalLitres);
       for (let i = 0; i < sortedLines.length; i++) {
         for (let j = i + 1; j < sortedLines.length; j++) {
           const sum = (sortedLines[i].litres || 0) + (sortedLines[j].litres || 0);
-          const diff = Math.abs(sum - data.litres);
+          const diff = Math.abs(sum - aiOrigTotalLitres);
           if (diff < bestDiff) { bestDiff = diff; bestSubset = [sortedLines[i], sortedLines[j]]; }
         }
       }
-
       if (bestSubset.length < data.lines.length) {
+        // Cost corroboration: compare subset vs full-line cost sums to the AI's
+        // reported totalCost. Two independent signals agreeing (litres + cost)
+        // is the bar for dropping real-looking lines.
+        const subsetCost = bestSubset.reduce((s, l) => s + (l.cost || 0), 0);
+        const fullLinesCost = data.lines.reduce((s, l) => s + (l.cost || 0), 0);
+        const tolerance = aiOrigTotalCost > 0 ? Math.min(aiOrigTotalCost * 0.05, 5) : 0;
+        const subsetCostMatches = aiOrigTotalCost > 0 && subsetCost > 0 &&
+          Math.abs(subsetCost - aiOrigTotalCost) < tolerance;
+        const fullCostMatches = aiOrigTotalCost > 0 && fullLinesCost > 0 &&
+          Math.abs(fullLinesCost - aiOrigTotalCost) < tolerance;
+        const aiLowConf = aiOriginal.confidenceOverall === "low";
+
         data._mathIssues = data._mathIssues || [];
-        data._mathIssues.push(`Removed ${data.lines.length - bestSubset.length} phantom fuel line(s) — AI detected ${data.lines.length} but receipt shows ~${data.litres}L total`);
-        data.lines = bestSubset;
+        if (subsetCostMatches && !fullCostMatches && !aiLowConf) {
+          // Both signals agree: reported total is right, extra lines are phantoms.
+          data._mathIssues.push(`Removed ${data.lines.length - bestSubset.length} phantom fuel line(s) — AI detected ${data.lines.length} but litres AND cost confirm ~${aiOrigTotalLitres}L total.`);
+          data.lines = bestSubset;
+        } else if (fullCostMatches) {
+          // Line costs sum to the reported total — the lines are correct and
+          // the REPORTED TOTAL LITRES is the misread. Keep all lines, let the
+          // downstream recalc set data.litres from the line sum. Flag for review.
+          data._mathIssues.push(`Scanned ${data.lines.length} fuel line(s) summing ${lineLitresSum.toFixed(2)}L — line costs match total, so reported total of ~${aiOrigTotalLitres}L looks misread. Using line sum.`);
+        } else {
+          // Ambiguous — neither signal corroborates. Leave lines intact and flag
+          // for manual review so the user can decide.
+          data._mathIssues.push(`Scanned ${data.lines.length} fuel line(s) summing ${lineLitresSum.toFixed(2)}L vs reported ${aiOrigTotalLitres}L. Cost data couldn't resolve the mismatch — please review manually before submitting.`);
+        }
       }
     }
   }
@@ -1501,11 +1540,49 @@ function reconcileCardMappingsWithDB(mappings) {
     if (c.length >= 16 && !c.includes("*") && !regoToCard[r]) regoToCard[r] = c;
   });
 
+  // Build the set of ALL canonical card numbers currently in use so we can
+  // detect a different kind of staleness: when a mapping's raw-AI-read card
+  // value now matches a genuine canonical card belonging to a DIFFERENT
+  // vehicle. Keeping such a mapping would misroute future scans of that
+  // other vehicle back to this mapping's correctRego — a cross-card
+  // contamination bug. Drop those mappings.
+  const canonicalCards = new Set(Object.values(regoToCard));
+  const canonicalCardSuffixes = new Set(
+    [...canonicalCards].map(c => c.length >= 8 ? c.slice(-8) : c)
+  );
+
   const reconciled = {};
   let changed = 0;
+  let dropped = 0;
   for (const [key, m] of Object.entries(mappings)) {
     const correctRego = (m?.correctRego || "").toUpperCase().replace(/\s+/g, "");
     const staticCard = correctRego ? regoToCard[correctRego] : null;
+
+    // Cross-card collision check: does the mapping's rawCard (or its suffix,
+    // or the key itself for card-keyed mappings) now match a canonical card
+    // that ISN'T this mapping's own target?
+    const rawCard = ((m?.rawCard || "") + "").replace(/[\s*]/g, "").toUpperCase();
+    const rawCardFromKey = !key.startsWith("rego_") ? key.toUpperCase() : "";
+    const candidates = [rawCard, rawCardFromKey].filter(Boolean);
+    const ownTargetCard = staticCard || (m?.correctCard || "").replace(/\s/g, "");
+    const collidesWithOtherCanonical = candidates.some(cand => {
+      if (!cand) return false;
+      // Direct full-card match with a canonical card that isn't ours
+      if (canonicalCards.has(cand) && cand !== ownTargetCard) return true;
+      // Suffix match (legacy-keyed mapping could collide via last-8)
+      if (cand.length >= 8) {
+        const suffix = cand.slice(-8);
+        const ownSuffix = ownTargetCard ? ownTargetCard.slice(-8) : "";
+        if (canonicalCardSuffixes.has(suffix) && suffix !== ownSuffix) return true;
+      }
+      return false;
+    });
+    if (collidesWithOtherCanonical) {
+      console.log(`[Card Learning] Dropping stale mapping "${key}" for ${correctRego || "(no rego)"} — its raw-read now matches a different canonical card number (would misroute other scans).`);
+      dropped++;
+      continue; // excluded from reconciled
+    }
+
     if (staticCard) {
       const cleanLearned = (m.correctCard || "").replace(/\s/g, "");
       if (cleanLearned !== staticCard) {
@@ -1522,7 +1599,7 @@ function reconcileCardMappingsWithDB(mappings) {
     }
     reconciled[key] = m;
   }
-  return { reconciled, changed };
+  return { reconciled, changed, dropped };
 }
 
 function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMappings) {
@@ -1715,7 +1792,14 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMap
   }
 
   // ── STRATEGY 2: Match by UNIQUE 8 DIGITS of the card ──
-  // Only if rego didn't find a match, or to confirm/improve the rego match
+  // Only if rego didn't find a match, or to confirm/improve the rego match.
+  //
+  // With 200+ fleet cards all sharing the "70343051" prefix, the effective
+  // unique space is only 8 digits — accepting any 2-edit neighbour here will
+  // eventually pick the wrong card for ambiguous reads. We now require:
+  //   • dist ≤ 1 always, OR
+  //   • dist = 2 only when the scanned REGO independently corroborates
+  //     (dist ≤ 1 to the candidate's rego) — two signals agreeing.
   if (scannedUnique8 && scannedUnique8.length >= 4) {
     let bestCardMatch = null;
     let bestCardDist = Infinity;
@@ -1725,9 +1809,11 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMap
 
       // Compare unique 8 digits with edit distance
       const dist = editDistance(scannedUnique8, knownUnique);
+      const regoCorroborates = !!cleanScannedRego && !!known.rego &&
+        editDistance(cleanScannedRego, known.rego) <= 1;
+      const accept = dist <= 1 || (dist === 2 && regoCorroborates);
 
-      // Allow up to 2 edits on the 8 unique digits
-      if (dist <= 2 && dist < bestCardDist) {
+      if (accept && dist < bestCardDist) {
         bestCardDist = dist;
         bestCardMatch = known;
       }
@@ -1755,7 +1841,12 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMap
         bestMatch = bestCardMatch;
         bestScore = bestCardDist;
       } else if (bestCardMatch.rego === bestMatch.rego) {
-        // Card confirms rego — great!
+        // Card confirms rego. If Strategy 1 picked a rego-only entry that had
+        // no card data (e.g. a REGO_DB row without `c`), upgrade to the
+        // bestCardMatch row — it has the authoritative card number we need.
+        if (!bestMatch.card && bestCardMatch.card) {
+          bestMatch = bestCardMatch;
+        }
         bestScore = 0;
       } else if (bestCardDist === 0 && bestScore > 0) {
         // Card is exact but rego pointed elsewhere — trust exact card
@@ -3737,12 +3828,12 @@ export default function App() {
           const cmRes = await window.storage.get("fuel_learned_card_mappings");
           if (cmRes?.value) {
             const loaded = JSON.parse(cmRes.value);
-            const { reconciled, changed } = reconcileCardMappingsWithDB(loaded);
+            const { reconciled, changed, dropped } = reconcileCardMappingsWithDB(loaded);
             setLearnedCardMappings(reconciled);
-            if (changed > 0) {
+            if (changed > 0 || dropped > 0) {
               try { await window.storage.set("fuel_learned_card_mappings", JSON.stringify(reconciled)); } catch (_) {}
               db.saveSetting("learned_card_mappings", JSON.stringify(reconciled)).catch(() => {});
-              console.log(`[Card Learning] Reconciled ${changed} learned mapping(s) against static DB on local load`);
+              console.log(`[Card Learning] Local load: reconciled ${changed}, dropped ${dropped} stale mapping(s) against static DB`);
             }
           }
         } catch (_) {}
@@ -3773,12 +3864,12 @@ export default function App() {
             if (raw) {
               try {
                 const loaded = JSON.parse(raw);
-                const { reconciled, changed } = reconcileCardMappingsWithDB(loaded);
+                const { reconciled, changed, dropped } = reconcileCardMappingsWithDB(loaded);
                 setLearnedCardMappings(reconciled);
-                if (changed > 0) {
+                if (changed > 0 || dropped > 0) {
                   window.storage.set("fuel_learned_card_mappings", JSON.stringify(reconciled)).catch(() => {});
                   db.saveSetting("learned_card_mappings", JSON.stringify(reconciled)).catch(() => {});
-                  console.log(`[Card Learning] Reconciled ${changed} learned mapping(s) against static DB on cloud load`);
+                  console.log(`[Card Learning] Cloud load: reconciled ${changed}, dropped ${dropped} stale mapping(s) against static DB`);
                 }
               } catch (_) {}
             }
@@ -4061,11 +4152,11 @@ export default function App() {
         if (!raw) return;
         try {
           const loaded = JSON.parse(raw);
-          const { reconciled, changed } = reconcileCardMappingsWithDB(loaded);
+          const { reconciled, changed, dropped } = reconcileCardMappingsWithDB(loaded);
           setLearnedCardMappings(reconciled);
           learnedCardMappingsRef.current = reconciled;
           try { window.storage.set("fuel_learned_card_mappings", JSON.stringify(reconciled)); } catch (_) {}
-          if (changed > 0) db.saveSetting("learned_card_mappings", JSON.stringify(reconciled)).catch(() => {});
+          if (changed > 0 || dropped > 0) db.saveSetting("learned_card_mappings", JSON.stringify(reconciled)).catch(() => {});
         } catch (_) {}
       }).catch(() => {});
       db.loadSetting("learned_corrections").then(raw => {
@@ -4248,16 +4339,48 @@ export default function App() {
     db.saveSetting("learned_corrections", JSON.stringify(trimmed)).catch(() => {});
   };
 
-  // Analyze digit differences between AI-read and user-corrected numeric values
+  // Analyze digit differences between AI-read and user-corrected numeric values.
+  // Uses Levenshtein DP with traceback so length-mismatched corrections still
+  // surface learning signal — previously the function bailed on any length
+  // mismatch, which threw away the most valuable patterns (missing/extra
+  // digits, e.g. AI "2.82" vs receipt "2.829").
+  //
+  // Returned op shapes:
+  //   { from: "X", to: "Y", field }   — substitution (classic misread)
+  //   { from: "X", to: "",  field }   — AI added a digit that isn't there
+  //   { from: "",  to: "Y", field }   — AI missed a digit
   const analyzeDigitDiff = (aiValue, userValue, field) => {
     const a = String(aiValue).replace(/[^0-9]/g, "");
     const u = String(userValue).replace(/[^0-9]/g, "");
-    if (a.length !== u.length || a === u) return [];
-    const diffs = [];
-    for (let i = 0; i < a.length; i++) {
-      if (a[i] !== u[i]) diffs.push({ from: a[i], to: u[i], field });
+    if (!a || !u || a === u) return [];
+    const m = a.length, n = u.length;
+    // Build DP table
+    const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+    for (let i = 0; i <= m; i++) dp[i][0] = i;
+    for (let j = 0; j <= n; j++) dp[0][j] = j;
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        if (a[i - 1] === u[j - 1]) dp[i][j] = dp[i - 1][j - 1];
+        else dp[i][j] = 1 + Math.min(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1]);
+      }
     }
-    return diffs;
+    // Ignore wholesale rewrites — if the edit distance is large relative to
+    // length, the correction isn't a digit-level pattern, it's a full re-read.
+    if (dp[m][n] > Math.max(2, Math.floor(Math.max(m, n) * 0.5))) return [];
+    // Traceback to reconstruct ops
+    const diffs = [];
+    let i = m, j = n;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && a[i - 1] === u[j - 1]) { i--; j--; continue; }
+      const sub = i > 0 && j > 0 ? dp[i - 1][j - 1] : Infinity;
+      const del = i > 0 ? dp[i - 1][j] : Infinity;
+      const ins = j > 0 ? dp[i][j - 1] : Infinity;
+      const best = Math.min(sub, del, ins);
+      if (best === sub) { diffs.push({ from: a[i - 1], to: u[j - 1], field }); i--; j--; }
+      else if (best === del) { diffs.push({ from: a[i - 1], to: "", field }); i--; }
+      else { diffs.push({ from: "", to: u[j - 1], field }); j--; }
+    }
+    return diffs.reverse();
   };
 
   // Learn from user corrections — called on submission to compare AI output vs final values
@@ -4288,11 +4411,26 @@ export default function App() {
       correctionsMade++;
     }
 
-    // 2. Always record station price baseline (even without corrections)
+    // 2. Record station price baseline — but only when the PPL is trustworthy.
+    // If normalizeReceiptData algorithmically corrected the PPL (_pplCorrected)
+    // AND the user didn't override it (no _rawPpl), we have no independent
+    // confirmation of the value — recording it could poison future anomaly
+    // detection, since every subsequent correct scan would look like a 20%+
+    // deviation. Safer to skip the baseline this one time.
     const finalStation = userStation || aiStation;
-    const finalPpl = parseFloat(finalReceipt?.pricePerLitre);
     const finalFuelType = (finalReceipt?.fuelType || "").trim();
-    if (finalStation && finalPpl > 0) {
+    const userEditedPpl = finalReceipt?._rawPpl != null && finalReceipt._rawPpl !== "";
+    const pplWasAlgorithmicallyCorrected = !!snapshot?._pplCorrected ||
+      (Array.isArray(snapshot?.lines) && snapshot.lines.some(l => l?._pplCorrected));
+    const pplIsTrustworthy = userEditedPpl || !pplWasAlgorithmicallyCorrected;
+    // Prefer the user's raw-typed value when present; it reflects their
+    // intent more accurately than the normalized float (which may have been
+    // corrected before the user saw it).
+    const rawPplParsed = userEditedPpl ? parseFloat(finalReceipt._rawPpl) : NaN;
+    const finalPpl = Number.isFinite(rawPplParsed) && rawPplParsed > 0
+      ? rawPplParsed
+      : parseFloat(finalReceipt?.pricePerLitre);
+    if (finalStation && finalPpl > 0 && pplIsTrustworthy) {
       const sKey = finalStation;
       if (!corrections.stationPrices[sKey]) corrections.stationPrices[sKey] = { lastPrices: [], fuelTypes: [], lastSeen: today };
       corrections.stationPrices[sKey].lastPrices.push(finalPpl);
@@ -4300,6 +4438,8 @@ export default function App() {
       if (finalFuelType && !corrections.stationPrices[sKey].fuelTypes.includes(finalFuelType)) {
         corrections.stationPrices[sKey].fuelTypes.push(finalFuelType);
       }
+    } else if (finalStation && finalPpl > 0 && !pplIsTrustworthy) {
+      console.log(`[Learn] Skipping station price baseline for "${finalStation}" — PPL was algorithmically corrected and user did not override, so the value is unverified.`);
     }
 
     // 3. Fuel type corrections per station
