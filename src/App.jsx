@@ -3738,9 +3738,20 @@ export default function App() {
   const [confirmAction, setConfirmAction] = useState(null);
   const [addVehicle, setAddVehicle] = useState({ rego: "", div: "Tree", type: "Ute", name: "", owner: "", fuel: "Diesel" });
   const [fleetCardTxns, setFleetCardTxns] = useState([]); // imported fleet card transactions
-  const [reconFilter, setReconFilter] = useState("all"); // "all" | "matched" | "mismatched" | "missing"
+  const [reconFilter, setReconFilter] = useState("all"); // "all" | "matched" | "scan_error" | "missing" | "app_only"
   const [reconSearch, setReconSearch] = useState("");
   const [reconUploading, setReconUploading] = useState(false);
+  // Reconciliation date range — defaults to today's Sydney date on both ends
+  // so the admin sees a single-day reconciliation by default (their usual
+  // end-of-day workflow). Empty string means "no bound on that side".
+  const [reconFromDate, setReconFromDate] = useState(() => {
+    const { y, m, d } = sydneyTodayYMD();
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  });
+  const [reconToDate, setReconToDate] = useState(() => {
+    const { y, m, d } = sydneyTodayYMD();
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  });
   const csvInputRef = useRef(null);
 
   // ── Receipt image compression ──
@@ -11205,12 +11216,15 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     );
   };
 
-  // ── Fleet Card CSV Parser ──────────────────────────────────────────────
-  const parseFleetCardCSV = (text) => {
-    const lines = text.split(/\r?\n/).filter(l => l.trim());
-    if (lines.length < 2) return [];
-    // Parse header — normalize common column names
-    const rawHeaders = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, "").toLowerCase());
+  // ── Fleet Card Row Parser ──────────────────────────────────────────────
+  // Works off ROW arrays (not raw CSV text) so the upload handler can feed in
+  // Excel-parsed rows that preserve cell types (Date objects, numbers). The
+  // previous string-based parser silently broke on Excel serial dates like
+  // 46132 — every transaction came back with an unparseable date and every
+  // match showed "missing receipt".
+  const parseFleetCardRows = (rows) => {
+    if (!Array.isArray(rows) || rows.length < 2) return [];
+    const rawHeaders = rows[0].map(h => (h == null ? "" : String(h)).trim().toLowerCase());
     const colMap = {};
     rawHeaders.forEach((h, i) => {
       if (/^transaction\s*date$/.test(h)) colMap.date = i;
@@ -11225,82 +11239,182 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       else if (/^transaction\s*num/.test(h)) colMap.transactionNumber = i;
       else if (/cardholder|^driver$/.test(h)) colMap.driver = i;
       else if (/product|fuel.*type/.test(h)) colMap.product = i;
-      // Fallback: generic date column (only if transaction date not found)
       else if (!colMap.date && /^date$/.test(h)) colMap.date = i;
     });
-    // Parse rows
-    const txns = [];
-    for (let r = 1; r < lines.length; r++) {
-      // Handle quoted CSV fields
-      const row = [];
-      let cur = "", inQ = false;
-      for (const ch of lines[r]) {
-        if (ch === '"') { inQ = !inQ; }
-        else if (ch === ',' && !inQ) { row.push(cur.trim()); cur = ""; }
-        else { cur += ch; }
+
+    // Convert an Excel date cell to Australian DD/MM/YYYY. Accepts JS Date
+    // (what XLSX gives with cellDates:true) or a serial number or any string.
+    const toAusDate = (v) => {
+      if (v == null || v === "") return "";
+      if (v instanceof Date && !isNaN(v.getTime())) {
+        return `${String(v.getDate()).padStart(2, "0")}/${String(v.getMonth() + 1).padStart(2, "0")}/${v.getFullYear()}`;
       }
-      row.push(cur.trim());
-      if (row.length < 3) continue; // skip empty/malformed rows
-      const get = (key) => colMap[key] != null ? (row[colMap[key]] || "").replace(/^"|"$/g, "").trim() : "";
+      if (typeof v === "number" && v > 25000 && v < 100000) {
+        // Excel serial → JS Date. Excel's epoch is 1899-12-30 (accounting
+        // for Excel's leap-year bug), so serial N = (N - 25569) days past
+        // Unix epoch.
+        const ms = (v - 25569) * 86400 * 1000;
+        const d = new Date(ms);
+        if (!isNaN(d.getTime())) {
+          return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+        }
+      }
+      // String — may already be DD/MM/YYYY or could be US format from CSV
+      return String(v).trim();
+    };
+
+    // Convert Excel time cell (fraction of a day) or a Date-with-epoch-offset
+    // to HH:MM. Falls through to string form for plain inputs.
+    const toTime = (v) => {
+      if (v == null || v === "") return null;
+      if (v instanceof Date && !isNaN(v.getTime())) {
+        return `${String(v.getHours()).padStart(2, "0")}:${String(v.getMinutes()).padStart(2, "0")}`;
+      }
+      if (typeof v === "number" && v >= 0 && v < 1) {
+        const totalMin = Math.round(v * 24 * 60);
+        const h = Math.floor(totalMin / 60), m = totalMin % 60;
+        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+      }
+      return String(v).trim();
+    };
+
+    const txns = [];
+    for (let r = 1; r < rows.length; r++) {
+      const row = rows[r];
+      if (!row || row.every(v => v == null || v === "")) continue; // blank line
+      const get = (key) => {
+        if (colMap[key] == null) return "";
+        const v = row[colMap[key]];
+        if (v == null) return "";
+        return typeof v === "string" ? v.trim().replace(/^"|"$/g, "") : String(v);
+      };
+      const rawCost = get("cost").replace(/[$,]/g, "");
+      const rawPpl = get("ppl").replace(/[$,]/g, "");
       const litres = parseFloat(get("litres")) || null;
-      const cost = parseFloat(get("cost")?.replace(/[$,]/g, "")) || null;
-      const ppl = parseFloat(get("ppl")?.replace(/[$,]/g, "")) || (litres && cost ? parseFloat((cost / litres).toFixed(4)) : null);
-      const rawCard = get("cardNumber").replace(/[\[\]\s]/g, ""); // strip [brackets] and spaces
+      const cost = parseFloat(rawCost) || null;
+      const ppl = parseFloat(rawPpl) || (litres && cost ? parseFloat((cost / litres).toFixed(4)) : null);
+      const rawCard = get("cardNumber").replace(/[\[\]\s]/g, "");
       const rawOdo = get("odometer");
       const odoVal = parseFloat(rawOdo) || null;
+      const product = get("product");
+      // Surcharge / fee detection — these rows appear in FleetCard Australia
+      // exports (e.g. "BP Surcharge") but aren't real fuel transactions. Flag
+      // them so reconciliation can skip them while still letting admin see
+      // a "filtered N surcharges" summary.
+      const isSurcharge = /surcharge|card\s*fee|transaction\s*fee|merchant\s*fee|fleet\s*card\s*fee|eftpos\s*fee|service\s*fee/i.test(product);
       const txn = {
         id: `txn-${Date.now()}-${r}-${Math.random().toString(36).slice(2, 6)}`,
-        date: get("date"),
-        time: get("time") || null,
+        date: toAusDate(colMap.date != null ? row[colMap.date] : ""),
+        time: toTime(colMap.time != null ? row[colMap.time] : null),
         cardNumber: rawCard,
         rego: get("rego").toUpperCase().replace(/[^A-Z0-9]/g, ""),
         litres,
         ppl,
         cost,
         station: get("station"),
-        odometer: odoVal && odoVal > 0 && odoVal !== 777 ? odoVal : null, // 777 = placeholder in fleet card data
+        odometer: odoVal && odoVal > 0 && odoVal !== 777 ? odoVal : null,
         driver: get("driver"),
-        product: get("product"),
+        product,
         transactionNumber: get("transactionNumber") || null,
+        isSurcharge,
         importedAt: new Date().toISOString(),
       };
-      // Skip rows with no usable data
       if (!txn.date && !txn.cardNumber && !txn.rego && !txn.cost) continue;
       txns.push(txn);
     }
     return txns;
   };
 
+  // ── Receipt-level grouping for reconciliation ────────────────────────────
+  // Splits on the same receipt reconcile to a SINGLE fleet-card transaction
+  // (the FleetCard report only has the receipt-level total, not per-driver
+  // allocations). Group entries by splitGroup when present; otherwise fall
+  // back to rego+date+card so older entries (created before splitGroup was
+  // populated) still merge correctly. The grouping is view-only — nothing
+  // in persisted state changes.
+  const normalizeCardNum = (s) => (s || "").replace(/[\s\[\]]/g, "");
+  const buildReceiptGroupsFromEntries = (entriesList) => {
+    const groups = {};
+    for (const e of entriesList) {
+      const key = e.splitGroup ||
+        `fallback|${(e.registration || "").toUpperCase()}|${e.date || ""}|${normalizeCardNum(e.fleetCardNumber)}`;
+      if (!groups[key]) {
+        groups[key] = {
+          key,
+          date: e.date || "",
+          registration: e.registration || "",
+          cardRego: e.cardRego || "",
+          fleetCardNumber: e.fleetCardNumber || "",
+          driverName: e.driverName || "",
+          station: e.station || "",
+          totalCost: 0,
+          totalLitres: 0,
+          entries: [],
+        };
+      }
+      const g = groups[key];
+      g.totalCost += e.totalCost || 0;
+      g.totalLitres += e.litres || 0;
+      g.entries.push(e);
+      // Fill first-seen metadata where missing
+      if (!g.driverName && e.driverName) g.driverName = e.driverName;
+      if (!g.station && e.station) g.station = e.station;
+      if (!g.fleetCardNumber && e.fleetCardNumber) g.fleetCardNumber = e.fleetCardNumber;
+      if (!g.cardRego && e.cardRego) g.cardRego = e.cardRego;
+    }
+    return Object.values(groups);
+  };
+
   // ── Fleet Card Transaction Matching ───────────────────────────────────────
-  const matchTransactionToEntry = (txn) => {
-    // Try to find a matching entry by card number + date + cost (with tolerance)
-    const candidates = entries.filter(e => {
-      // Date must match
-      if (!txn.date || !e.date) return false;
-      const txnDate = parseDate(txn.date);
-      const entryDate = parseDate(e.date);
-      if (!txnDate || !entryDate || txnDate !== entryDate) return false;
-      // Card number or rego must match
-      const cardMatch = txn.cardNumber && e.fleetCardNumber && txn.cardNumber.replace(/\s/g, "") === e.fleetCardNumber.replace(/\s/g, "");
-      const regoMatch = txn.rego && e.registration && txn.rego === e.registration.toUpperCase();
-      return cardMatch || regoMatch;
+  // Match a fleet-card transaction to a receipt GROUP. Returns one of:
+  //   matched    — card/rego match AND total cost within tolerance
+  //   scan_error — card/rego match but cost is off by more than tolerance
+  //                (signals the receipt scan likely got the amount wrong)
+  //   missing    — no app entry at all for this txn's card/rego on this date
+  //                (signals the driver hasn't lodged the receipt yet)
+  const matchTxnToReceiptGroup = (txn, groups) => {
+    if (!txn.date) return { status: "missing", group: null };
+    const txnDate = parseDate(txn.date);
+    if (!txnDate) return { status: "missing", group: null };
+    const cleanTxnCard = normalizeCardNum(txn.cardNumber);
+    const cleanTxnRego = (txn.rego || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    // Narrow to groups on the same day
+    const sameDay = groups.filter(g => {
+      const gTs = parseDate(g.date);
+      return gTs && gTs === txnDate;
     });
-    if (candidates.length === 0) return { status: "missing", entry: null };
-    // Find best match by cost
+    if (sameDay.length === 0) return { status: "missing", group: null };
+    // Primary match: card number
+    const cardCandidates = cleanTxnCard
+      ? sameDay.filter(g => g.entries.some(e => normalizeCardNum(e.fleetCardNumber) === cleanTxnCard))
+      : [];
+    // Fallback: fleet-card rego (or vehicle rego if card rego is absent)
+    const regoCandidates = cleanTxnRego
+      ? sameDay.filter(g => {
+          const gCardRego = (g.cardRego || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+          const gReg = (g.registration || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+          return gCardRego === cleanTxnRego || gReg === cleanTxnRego;
+        })
+      : [];
+    const candidates = cardCandidates.length > 0 ? cardCandidates : regoCandidates;
+    if (candidates.length === 0) return { status: "missing", group: null };
+    // Pick the candidate with the smallest cost difference
     let best = candidates[0], bestDiff = Infinity;
-    for (const c of candidates) {
-      if (txn.cost != null && c.totalCost != null) {
-        const diff = Math.abs(txn.cost - c.totalCost);
-        if (diff < bestDiff) { bestDiff = diff; best = c; }
+    for (const g of candidates) {
+      if (txn.cost != null && g.totalCost > 0) {
+        const diff = Math.abs(txn.cost - g.totalCost);
+        if (diff < bestDiff) { bestDiff = diff; best = g; }
       }
     }
-    // Check if costs match within tolerance ($2 or 5%)
-    if (txn.cost != null && best.totalCost != null) {
+    if (txn.cost != null && best.totalCost > 0) {
       const diff = Math.abs(txn.cost - best.totalCost);
-      const pct = best.totalCost > 0 ? (diff / best.totalCost) * 100 : 0;
-      if (diff > 2 && pct > 5) return { status: "mismatched", entry: best, diff };
+      const pct = (diff / best.totalCost) * 100;
+      // Tolerance: $2 OR 5%. Both must be exceeded to flag as scan error.
+      if (diff > 2 && pct > 5) return { status: "scan_error", group: best, diff };
+      return { status: "matched", group: best, diff };
     }
-    return { status: "matched", entry: best };
+    // No cost on txn side — consider matched if card/rego aligned
+    return { status: "matched", group: best, diff: null };
   };
 
   // ── Reconciliation View ───────────────────────────────────────────────────
@@ -11309,16 +11423,32 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       if (!file) return;
       setReconUploading(true);
       try {
-        let text;
+        let rows;
         if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls")) {
           const buf = await file.arrayBuffer();
-          const wb = XLSX.read(buf, { type: "array" });
+          // cellDates:true → date/time cells come back as JS Date objects
+          // instead of raw Excel serial numbers (46132). raw:true preserves
+          // number types for cost/litres columns.
+          const wb = XLSX.read(buf, { type: "array", cellDates: true });
           const ws = wb.Sheets[wb.SheetNames[0]];
-          text = XLSX.utils.sheet_to_csv(ws);
+          rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: true });
         } else {
-          text = await file.text();
+          // CSV fallback — tokenize into rows with basic quote handling.
+          const text = await file.text();
+          const lines = text.split(/\r?\n/).filter(l => l.trim());
+          rows = lines.map(line => {
+            const row = [];
+            let cur = "", inQ = false;
+            for (const ch of line) {
+              if (ch === '"') inQ = !inQ;
+              else if (ch === ',' && !inQ) { row.push(cur); cur = ""; }
+              else cur += ch;
+            }
+            row.push(cur);
+            return row.map(s => s.trim());
+          });
         }
-        const newTxns = parseFleetCardCSV(text);
+        const newTxns = parseFleetCardRows(rows);
         if (newTxns.length === 0) {
           showToast("No transactions found in file. Check column headers.", "warn");
           setReconUploading(false);
@@ -11343,44 +11473,234 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       setReconUploading(false);
     };
 
-    // Run matching on all imported transactions
-    const results = fleetCardTxns.map(txn => ({
+    // Convert YYYY-MM-DD to epoch ms (start-of-day UTC) so both txn.date
+    // (DD/MM/YYYY via parseDate) and the range bounds can be compared uniformly.
+    const rangeDateToTs = (isoDate) => {
+      if (!isoDate) return null;
+      const [y, m, d] = isoDate.split("-").map(Number);
+      if (!y || !m || !d) return null;
+      return Date.UTC(y, m - 1, d);
+    };
+    const fromTs = rangeDateToTs(reconFromDate);
+    const toTs = rangeDateToTs(reconToDate);
+    const inRange = (dateStr) => {
+      const ts = parseDate(dateStr);
+      if (!ts) return false;
+      if (fromTs != null && ts < fromTs) return false;
+      if (toTs != null && ts > toTs) return false;
+      return true;
+    };
+
+    // Filter imported transactions to the selected range. Keep surcharges
+    // separate so we can show the admin how many were auto-hidden.
+    const inRangeTxns = fleetCardTxns.filter(t => inRange(t.date));
+    const surchargeTxns = inRangeTxns.filter(t => t.isSurcharge);
+    const fuelTxns = inRangeTxns.filter(t => !t.isSurcharge);
+
+    // Filter app entries to the same range, then group splits back into
+    // their receipts so each reconciles as a single unit.
+    const inRangeEntries = entries.filter(e => inRange(e.date));
+    const receiptGroups = buildReceiptGroupsFromEntries(inRangeEntries);
+
+    // Match each fleet-card transaction to a receipt group
+    const results = fuelTxns.map(txn => ({
       txn,
-      ...matchTransactionToEntry(txn),
+      ...matchTxnToReceiptGroup(txn, receiptGroups),
     }));
 
     const matched = results.filter(r => r.status === "matched");
-    const mismatched = results.filter(r => r.status === "mismatched");
+    const scanErrors = results.filter(r => r.status === "scan_error");
     const missing = results.filter(r => r.status === "missing");
 
-    // Also find receipts with no matching transaction ("receipt only")
-    const matchedEntryIds = new Set(results.filter(r => r.entry).map(r => r.entry.id));
+    // Receipt groups in range with no matching transaction — "app only".
+    // Usually rare (would mean: driver lodged a receipt but no fleet-card
+    // transaction was found). Could be a manual/cash entry, a wrong card
+    // number, or the FleetCard report hasn't been re-downloaded yet.
+    const matchedGroupKeys = new Set(results.filter(r => r.group).map(r => r.group.key));
+    const appOnlyGroups = receiptGroups.filter(g => !matchedGroupKeys.has(g.key));
 
     // Filter
     const filtered = reconFilter === "all" ? results
       : reconFilter === "matched" ? matched
-      : reconFilter === "mismatched" ? mismatched
-      : missing;
+      : reconFilter === "scan_error" ? scanErrors
+      : reconFilter === "missing" ? missing
+      : reconFilter === "app_only" ? [] // handled separately below
+      : results;
 
-    // Search
+    // Search (matches either side)
     const searchTerm = reconSearch.trim().toUpperCase();
-    const searched = searchTerm
-      ? filtered.filter(r =>
-          (r.txn.rego || "").includes(searchTerm) ||
-          (r.txn.cardNumber || "").includes(searchTerm) ||
-          (r.txn.driver || "").toUpperCase().includes(searchTerm) ||
-          (r.txn.station || "").toUpperCase().includes(searchTerm) ||
-          (r.entry?.registration || "").toUpperCase().includes(searchTerm) ||
-          (r.entry?.driverName || "").toUpperCase().includes(searchTerm)
-        )
-      : filtered;
+    const matchesSearch = (r) => {
+      if (!searchTerm) return true;
+      return (
+        (r.txn.rego || "").includes(searchTerm) ||
+        (r.txn.cardNumber || "").includes(searchTerm) ||
+        (r.txn.driver || "").toUpperCase().includes(searchTerm) ||
+        (r.txn.station || "").toUpperCase().includes(searchTerm) ||
+        (r.group?.registration || "").toUpperCase().includes(searchTerm) ||
+        (r.group?.driverName || "").toUpperCase().includes(searchTerm)
+      );
+    };
+    const searched = filtered.filter(matchesSearch);
+    const searchedAppOnly = (reconFilter === "all" || reconFilter === "app_only")
+      ? appOnlyGroups.filter(g => {
+          if (!searchTerm) return true;
+          return (g.registration || "").toUpperCase().includes(searchTerm) ||
+                 (g.driverName || "").toUpperCase().includes(searchTerm) ||
+                 normalizeCardNum(g.fleetCardNumber).includes(searchTerm);
+        })
+      : [];
+
+    // Color palette per status
+    const statusStyle = {
+      matched:    { label: "\u2713 Matched",          bg: "#f0fdf4", border: "#86efac", text: "#15803d" },
+      scan_error: { label: "\u26A0 Possible Scan Error", bg: "#fffbeb", border: "#fcd34d", text: "#b45309" },
+      missing:    { label: "\u2717 Missing Receipt",  bg: "#fef2f2", border: "#fca5a5", text: "#dc2626" },
+      app_only:   { label: "\u24D8 In App Only",      bg: "#eff6ff", border: "#93c5fd", text: "#1d4ed8" },
+    };
+
+    // Panel that renders one transaction row (or an app-only group — txn=null)
+    const renderTxnCard = (txn, group, status, diff) => {
+      const st = statusStyle[status] || statusStyle.matched;
+      const mergedCount = group?.entries?.length || 0;
+      const isMerged = mergedCount > 1;
+      return (
+        <div key={txn?.id || group?.key} style={{
+          background: "white", border: `1px solid ${st.border}`,
+          borderRadius: 10, overflow: "hidden",
+        }}>
+          {/* Status header */}
+          <div style={{
+            padding: "6px 12px", fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase",
+            background: st.bg, color: st.text,
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+          }}>
+            <span>{st.label}</span>
+            <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {isMerged && (
+                <span style={{ fontWeight: 600, fontSize: 10, background: "white", color: st.text, padding: "1px 6px", borderRadius: 4, border: `1px solid ${st.border}` }}>
+                  {mergedCount} splits merged
+                </span>
+              )}
+              {(txn?.date || group?.date) && <span style={{ fontWeight: 500, opacity: 0.8 }}>{txn?.date || group?.date}</span>}
+            </span>
+          </div>
+          <div style={{ padding: "10px 12px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 12 }}>
+              {/* FleetCard side */}
+              {txn ? (
+                <div>
+                  <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, marginBottom: 2 }}>FLEET CARD REPORT</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                    {txn.rego && <span style={{ fontWeight: 700, color: "#0f172a" }}>{txn.rego}</span>}
+                    {txn.driver && <span style={{ color: "#64748b" }}>{txn.driver}</span>}
+                  </div>
+                  <div style={{ color: "#64748b", marginTop: 2, fontSize: 11 }}>
+                    {txn.litres != null && <span>{txn.litres}L</span>}
+                    {txn.ppl != null && <span> @ ${txn.ppl}/L</span>}
+                    {txn.cost != null && <span style={{ fontWeight: 600, color: "#0f172a" }}> = ${txn.cost.toFixed(2)}</span>}
+                  </div>
+                  {txn.station && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{txn.station}</div>}
+                  {txn.product && <div style={{ fontSize: 10, color: "#94a3b8" }}>{txn.product}</div>}
+                  {txn.time && <div style={{ fontSize: 10, color: "#cbd5e1", marginTop: 2 }}>{txn.time}</div>}
+                  {txn.cardNumber && <div style={{ fontSize: 9, color: "#cbd5e1", marginTop: 2, fontFamily: "monospace" }}>{formatCardNumber(txn.cardNumber)}</div>}
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
+                  <div style={{ fontSize: 12, color: "#1d4ed8", fontWeight: 600 }}>Not in fleet card report</div>
+                  <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
+                    Manual entry or report not yet downloaded
+                  </div>
+                </div>
+              )}
+              {/* App side */}
+              {group ? (
+                <div style={{ borderLeft: "2px solid #e2e8f0", paddingLeft: 10 }}>
+                  <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, marginBottom: 2 }}>APP ENTR{mergedCount > 1 ? "IES" : "Y"}</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                    {group.registration && <span style={{ fontWeight: 700, color: "#0f172a" }}>{group.registration}</span>}
+                    {group.driverName && <span style={{ color: "#64748b" }}>{group.driverName}</span>}
+                  </div>
+                  <div style={{ color: "#64748b", marginTop: 2, fontSize: 11 }}>
+                    {group.totalLitres > 0 && <span>{group.totalLitres.toFixed(2)}L</span>}
+                    <span style={{ fontWeight: 600, color: "#0f172a" }}> = ${group.totalCost.toFixed(2)}</span>
+                    {isMerged && <span style={{ color: "#94a3b8" }}> (sum of {mergedCount} splits)</span>}
+                  </div>
+                  {group.station && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{group.station}</div>}
+                  {status === "scan_error" && diff != null && (
+                    <div style={{ marginTop: 4, fontSize: 11, fontWeight: 700, color: "#b45309", background: "#fffbeb", padding: "2px 8px", borderRadius: 4, display: "inline-block" }}>
+                      Difference: ${diff.toFixed(2)} {"\u2014"} check the receipt scan
+                    </div>
+                  )}
+                  {group.fleetCardNumber && <div style={{ fontSize: 9, color: "#cbd5e1", marginTop: 2, fontFamily: "monospace" }}>{formatCardNumber(group.fleetCardNumber)}</div>}
+                </div>
+              ) : (
+                <div style={{ borderLeft: "2px solid #fca5a5", paddingLeft: 10, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+                  <div style={{ fontSize: 12, color: "#dc2626", fontWeight: 600 }}>No receipt lodged</div>
+                  <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
+                    {txn?.driver ? `Follow up with ${txn.driver}` : "Driver unknown"}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // Quick-set range buttons
+    const setRangeTo = (daysAgo) => {
+      const today = new Date();
+      const from = new Date(today); from.setDate(today.getDate() - daysAgo);
+      const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      setReconFromDate(fmt(from));
+      setReconToDate(fmt(today));
+    };
 
     return (
       <div className="fade-in">
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Fleet Card Reconciliation</div>
           <div style={{ fontSize: 13, color: "#64748b", marginTop: 3 }}>
-            Upload daily or monthly fleet card CSV/Excel to match against scanned receipts
+            Pick a date range, upload the FleetCard Australia report, and the app will match it against lodged receipts
+          </div>
+        </div>
+
+        {/* Date range picker */}
+        <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, marginBottom: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#0891b2", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 8 }}>Date Range</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div style={{ flex: 1, minWidth: 140 }}>
+              <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>From</label>
+              <input type="date" value={reconFromDate} onChange={e => setReconFromDate(e.target.value)}
+                style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, fontFamily: "inherit", outline: "none", color: "#0f172a" }} />
+            </div>
+            <div style={{ flex: 1, minWidth: 140 }}>
+              <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>To</label>
+              <input type="date" value={reconToDate} onChange={e => setReconToDate(e.target.value)}
+                style={{ width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13, fontFamily: "inherit", outline: "none", color: "#0f172a" }} />
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+            {[
+              { label: "Today", days: 0 },
+              { label: "Yesterday", days: 1, single: true },
+              { label: "Last 7 days", days: 7 },
+              { label: "Last 30 days", days: 30 },
+            ].map(r => (
+              <button key={r.label} onClick={() => {
+                if (r.single) {
+                  const d = new Date(); d.setDate(d.getDate() - r.days);
+                  const f = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                  setReconFromDate(f); setReconToDate(f);
+                } else {
+                  setRangeTo(r.days);
+                }
+              }} style={{
+                padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 500,
+                background: "#f0f9ff", color: "#0891b2", border: "1px solid #bae6fd",
+                cursor: "pointer", fontFamily: "inherit",
+              }}>{r.label}</button>
+            ))}
           </div>
         </div>
 
@@ -11399,10 +11719,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             onChange={e => handleCSVUpload(e.target.files[0])} />
           <div style={{ fontSize: 28, marginBottom: 6 }}>{reconUploading ? "\u23F3" : "\uD83D\uDCC4"}</div>
           <div style={{ fontSize: 14, fontWeight: 600, color: "#374151" }}>
-            {reconUploading ? "Importing..." : "Drop fleet card CSV/Excel here or tap to upload"}
+            {reconUploading ? "Importing..." : "Drop FleetCard Australia report here or tap to upload"}
           </div>
           <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
-            Supports CSV and Excel (.xlsx) {"\u00B7"} Auto-detects columns by header names
+            Supports CSV and Excel (.xlsx) {"\u00B7"} Auto-detects columns {"\u00B7"} Surcharges filtered automatically
           </div>
         </div>
 
@@ -11410,25 +11730,36 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         {fleetCardTxns.length > 0 && (
           <>
             <div style={{
-              display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12,
+              display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8, marginBottom: 8,
             }}>
               {[
-                { label: "Total", count: results.length, color: "#374151", bg: "#f8fafc", border: "#e2e8f0" },
-                { label: "Matched", count: matched.length, color: "#15803d", bg: "#f0fdf4", border: "#86efac" },
-                { label: "Mismatched", count: mismatched.length, color: "#b45309", bg: "#fffbeb", border: "#fcd34d" },
-                { label: "Missing Receipt", count: missing.length, color: "#dc2626", bg: "#fef2f2", border: "#fca5a5" },
+                { key: "all",        label: "Total",    count: results.length,         color: "#374151", bg: "#f8fafc", border: "#e2e8f0" },
+                { key: "matched",    label: "Matched",  count: matched.length,         color: "#15803d", bg: "#f0fdf4", border: "#86efac" },
+                { key: "scan_error", label: "Scan Err", count: scanErrors.length,      color: "#b45309", bg: "#fffbeb", border: "#fcd34d" },
+                { key: "missing",    label: "Missing",  count: missing.length,         color: "#dc2626", bg: "#fef2f2", border: "#fca5a5" },
+                { key: "app_only",   label: "App Only", count: appOnlyGroups.length,   color: "#1d4ed8", bg: "#eff6ff", border: "#93c5fd" },
               ].map(s => (
-                <button key={s.label} onClick={() => setReconFilter(s.label === "Total" ? "all" : s.label === "Missing Receipt" ? "missing" : s.label.toLowerCase())}
+                <button key={s.key} onClick={() => setReconFilter(s.key)}
                   style={{
-                    background: (reconFilter === "all" && s.label === "Total") || reconFilter === s.label.toLowerCase() || (reconFilter === "missing" && s.label === "Missing Receipt")
-                      ? s.bg : "white",
-                    border: `1px solid ${(reconFilter === "all" && s.label === "Total") || reconFilter === s.label.toLowerCase() || (reconFilter === "missing" && s.label === "Missing Receipt") ? s.border : "#e2e8f0"}`,
+                    background: reconFilter === s.key ? s.bg : "white",
+                    border: `1px solid ${reconFilter === s.key ? s.border : "#e2e8f0"}`,
                     borderRadius: 8, padding: "8px 4px", cursor: "pointer", fontFamily: "inherit", textAlign: "center",
                   }}>
                   <div style={{ fontSize: 20, fontWeight: 700, color: s.color }}>{s.count}</div>
                   <div style={{ fontSize: 10, color: s.color, fontWeight: 600, marginTop: 2 }}>{s.label}</div>
                 </button>
               ))}
+            </div>
+
+            {/* Summary line */}
+            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 12, display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+              <span>
+                Range: <strong>{reconFromDate}</strong> to <strong>{reconToDate}</strong>
+                {surchargeTxns.length > 0 && <span> {"\u00B7"} {surchargeTxns.length} surcharge{surchargeTxns.length !== 1 ? "s" : ""} auto-filtered</span>}
+              </span>
+              <span>
+                {receiptGroups.length} receipt{receiptGroups.length !== 1 ? "s" : ""} in app {"\u00B7"} {fuelTxns.length} fuel txn{fuelTxns.length !== 1 ? "s" : ""} in report
+              </span>
             </div>
 
             {/* Search */}
@@ -11446,77 +11777,25 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
 
             {/* Transaction list */}
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {searched.length === 0 && (
+              {searched.length === 0 && searchedAppOnly.length === 0 && (
                 <div style={{ textAlign: "center", padding: 20, color: "#94a3b8", fontSize: 13 }}>
-                  No transactions match the current filter
+                  {fleetCardTxns.length === 0
+                    ? "Upload a fleet card report to begin"
+                    : fuelTxns.length === 0
+                    ? "No transactions in the selected date range"
+                    : "No transactions match the current filter"}
                 </div>
               )}
-              {searched.map(({ txn, status, entry, diff }) => (
-                <div key={txn.id} style={{
-                  background: "white", border: `1px solid ${status === "matched" ? "#86efac" : status === "mismatched" ? "#fcd34d" : "#fca5a5"}`,
-                  borderRadius: 10, overflow: "hidden",
-                }}>
-                  {/* Status header */}
-                  <div style={{
-                    padding: "6px 12px", fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase",
-                    background: status === "matched" ? "#f0fdf4" : status === "mismatched" ? "#fffbeb" : "#fef2f2",
-                    color: status === "matched" ? "#15803d" : status === "mismatched" ? "#b45309" : "#dc2626",
-                    display: "flex", justifyContent: "space-between", alignItems: "center",
-                  }}>
-                    <span>{status === "matched" ? "\u2713 Matched" : status === "mismatched" ? "\u26A0 Amount Mismatch" : "\u2717 Missing Receipt"}</span>
-                    {txn.date && <span style={{ fontWeight: 500, opacity: 0.8 }}>{txn.date}</span>}
+              {searched.map(r => renderTxnCard(r.txn, r.group, r.status, r.diff))}
+              {/* App-only section */}
+              {searchedAppOnly.length > 0 && (reconFilter === "all" || reconFilter === "app_only") && (
+                <>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#1d4ed8", letterSpacing: "0.04em", textTransform: "uppercase", marginTop: 8, marginBottom: 4 }}>
+                    In app but not in report ({searchedAppOnly.length})
                   </div>
-
-                  <div style={{ padding: "10px 12px" }}>
-                    {/* Transaction row */}
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 12 }}>
-                      <div>
-                        <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, marginBottom: 2 }}>FLEET CARD</div>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-                          {txn.rego && <span style={{ fontWeight: 700, color: "#0f172a" }}>{txn.rego}</span>}
-                          {txn.driver && <span style={{ color: "#64748b" }}>{txn.driver}</span>}
-                        </div>
-                        <div style={{ color: "#64748b", marginTop: 2, fontSize: 11 }}>
-                          {txn.litres != null && <span>{txn.litres}L</span>}
-                          {txn.ppl != null && <span> @ ${txn.ppl}/L</span>}
-                          {txn.cost != null && <span style={{ fontWeight: 600, color: "#0f172a" }}> = ${txn.cost.toFixed(2)}</span>}
-                        </div>
-                        {txn.station && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{txn.station}</div>}
-                        {txn.product && <div style={{ fontSize: 10, color: "#94a3b8" }}>{txn.product}</div>}
-                        {txn.cardNumber && <div style={{ fontSize: 9, color: "#cbd5e1", marginTop: 2, fontFamily: "monospace" }}>{formatCardNumber(txn.cardNumber)}</div>}
-                      </div>
-
-                      {entry ? (
-                        <div style={{ borderLeft: "2px solid #e2e8f0", paddingLeft: 10 }}>
-                          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, marginBottom: 2 }}>SCANNED RECEIPT</div>
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-                            {entry.registration && <span style={{ fontWeight: 700, color: "#0f172a" }}>{entry.registration}</span>}
-                            {entry.driverName && <span style={{ color: "#64748b" }}>{entry.driverName}</span>}
-                          </div>
-                          <div style={{ color: "#64748b", marginTop: 2, fontSize: 11 }}>
-                            {entry.litres != null && <span>{entry.litres}L</span>}
-                            {entry.pricePerLitre != null && <span> @ ${entry.pricePerLitre}/L</span>}
-                            {entry.totalCost != null && <span style={{ fontWeight: 600, color: "#0f172a" }}> = ${entry.totalCost.toFixed(2)}</span>}
-                          </div>
-                          {entry.station && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{entry.station}</div>}
-                          {status === "mismatched" && diff != null && (
-                            <div style={{ marginTop: 4, fontSize: 11, fontWeight: 700, color: "#b45309", background: "#fffbeb", padding: "2px 8px", borderRadius: 4, display: "inline-block" }}>
-                              Difference: ${diff.toFixed(2)}
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div style={{ borderLeft: "2px solid #fca5a5", paddingLeft: 10, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-                          <div style={{ fontSize: 12, color: "#dc2626", fontWeight: 600 }}>No receipt uploaded</div>
-                          <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
-                            {txn.driver ? `Follow up with ${txn.driver}` : "Driver unknown"}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
+                  {searchedAppOnly.map(g => renderTxnCard(null, g, "app_only", null))}
+                </>
+              )}
             </div>
 
             {/* Clear button */}
