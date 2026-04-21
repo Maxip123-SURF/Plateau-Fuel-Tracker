@@ -11734,6 +11734,145 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       setReconToDate(fmt(today));
     };
 
+    // Build a single-sheet side-by-side Excel workbook of the current
+    // reconciliation view. Respects the active date range + filter + search
+    // (so if the admin has filtered to just "Scan Errors", only those rows
+    // export). Each split entry gets its own row on the app side; the
+    // fleet-card side only fills the first split row of a group.
+    const exportReconciliation = () => {
+      try {
+        const aoa = [];
+        // Title + summary block
+        const rangeLabel = reconFromDate === reconToDate ? reconFromDate : `${reconFromDate} to ${reconToDate}`;
+        aoa.push([`Fleet Card Reconciliation — ${rangeLabel}`]);
+        aoa.push([`Generated ${new Date().toLocaleString("en-AU")}`]);
+        aoa.push([`Matched: ${matched.length}  ·  Scan Errors: ${scanErrors.length}  ·  Missing Receipt: ${missing.length}  ·  App Only: ${appOnlyGroups.length}  ·  Surcharges filtered: ${surchargeTxns.length}`]);
+        if (reconFilter !== "all") aoa.push([`Filter: ${reconFilter.replace("_", " ")}`]);
+        if (reconSearch.trim()) aoa.push([`Search: "${reconSearch.trim()}"`]);
+        aoa.push([]); // blank row
+
+        // Section headers row (visual grouping)
+        aoa.push([
+          "— FLEET CARD REPORT —", "", "", "", "", "", "", "", "", "", "",
+          "", // separator col
+          "— APP ENTRIES —", "", "", "", "", "", "", "", "", "", "", "",
+        ]);
+        // Column headers
+        aoa.push([
+          "Status", "Date", "Time", "Rego", "Card", "Driver", "Station", "Product", "Litres", "$/L", "Total",
+          "",
+          "Status", "Date", "Rego", "Driver", "Card", "Station", "Fuel", "Litres", "$/L", "Total", "Receipt", "Split",
+        ]);
+
+        // Data rows
+        for (const r of displayRows) {
+          const st = statusStyle[r.status];
+          const statusLabel = st?.title || r.status;
+
+          // FleetCard side — only render the txn once (on splitIdx === 0).
+          // Continuation rows show a "↳ same transaction" marker so the
+          // exported file reads the same way the screen does.
+          let fleetCardCols;
+          if (r.txn && r.splitIdx === 0) {
+            fleetCardCols = [
+              statusLabel,
+              r.txn.date || "",
+              r.txn.time || "",
+              r.txn.rego || "",
+              r.txn.cardNumber || "",
+              r.txn.driver || "",
+              r.txn.station || "",
+              r.txn.product || "",
+              r.txn.litres != null ? r.txn.litres : "",
+              r.txn.ppl != null ? r.txn.ppl : "",
+              r.txn.cost != null ? r.txn.cost : "",
+            ];
+          } else if (r.txn && r.splitIdx > 0) {
+            fleetCardCols = ["", "", "", "", "", "", `↳ same transaction (split ${r.splitIdx + 1} of ${r.splitTotal})`, "", "", "", ""];
+          } else {
+            // app_only — no txn
+            fleetCardCols = [statusLabel, "", "", "", "", "", "— no transaction in report —", "", "", "", ""];
+          }
+
+          // App side
+          let appCols;
+          if (r.entry) {
+            appCols = [
+              statusLabel + (r.splitTotal > 1 ? ` (${r.splitIdx + 1}/${r.splitTotal})` : ""),
+              r.entry.date || "",
+              r.entry.registration || "",
+              r.entry.driverName || "",
+              r.entry.fleetCardNumber || "",
+              r.entry.station || "",
+              r.entry.fuelType || "",
+              r.entry.litres != null ? r.entry.litres : "",
+              r.entry.pricePerLitre != null ? r.entry.pricePerLitre : "",
+              r.entry.totalCost != null ? r.entry.totalCost : "",
+              r.entry.hasReceipt ? "Yes" : "",
+              r.splitTotal > 1 ? `${r.splitIdx + 1}/${r.splitTotal}` : "",
+            ];
+          } else {
+            // missing receipt — txn with no app entry
+            const followUp = r.txn?.driver ? `follow up with ${r.txn.driver}` : "driver unknown";
+            appCols = [statusLabel, "", "", "", "", "", `— no receipt lodged (${followUp}) —`, "", "", "", "", ""];
+          }
+
+          aoa.push([...fleetCardCols, "", ...appCols]);
+        }
+
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        // Column widths tuned so the file opens with everything readable
+        ws["!cols"] = [
+          { wch: 16 }, // L-Status
+          { wch: 11 }, // L-Date
+          { wch: 7 },  // L-Time
+          { wch: 9 },  // L-Rego
+          { wch: 20 }, // L-Card
+          { wch: 18 }, // L-Driver
+          { wch: 30 }, // L-Station
+          { wch: 14 }, // L-Product
+          { wch: 9 },  // L-Litres
+          { wch: 8 },  // L-$/L
+          { wch: 10 }, // L-Total
+          { wch: 2 },  // separator
+          { wch: 22 }, // R-Status
+          { wch: 11 }, // R-Date
+          { wch: 9 },  // R-Rego
+          { wch: 18 }, // R-Driver
+          { wch: 20 }, // R-Card
+          { wch: 30 }, // R-Station
+          { wch: 14 }, // R-Fuel
+          { wch: 9 },  // R-Litres
+          { wch: 8 },  // R-$/L
+          { wch: 10 }, // R-Total
+          { wch: 9 },  // R-Receipt
+          { wch: 7 },  // R-Split
+        ];
+        // Merge the title + section header rows for readability
+        const headerTextRows = 3 +
+          (reconFilter !== "all" ? 1 : 0) +
+          (reconSearch.trim() ? 1 : 0);
+        const sectionRowIdx = headerTextRows + 1; // after blank
+        ws["!merges"] = [
+          ...Array.from({ length: headerTextRows }, (_, i) => ({ s: { r: i, c: 0 }, e: { r: i, c: 23 } })),
+          { s: { r: sectionRowIdx, c: 0 },  e: { r: sectionRowIdx, c: 10 } }, // "— FLEET CARD REPORT —"
+          { s: { r: sectionRowIdx, c: 12 }, e: { r: sectionRowIdx, c: 23 } }, // "— APP ENTRIES —"
+        ];
+
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Reconciliation");
+
+        const fileRange = reconFromDate === reconToDate ? reconFromDate : `${reconFromDate}_to_${reconToDate}`;
+        const filterTag = reconFilter !== "all" ? `_${reconFilter}` : "";
+        const filename = `Reconciliation_${fileRange}${filterTag}.xlsx`;
+        XLSX.writeFile(wb, filename);
+        showToast(`Exported ${displayRows.length} row${displayRows.length !== 1 ? "s" : ""} to ${filename}`);
+      } catch (err) {
+        console.error("Reconciliation export failed:", err);
+        showToast("Export failed: " + err.message, "warn");
+      }
+    };
+
     return (
       <div className="fade-in">
         <div style={{ marginBottom: 20 }}>
@@ -11840,17 +11979,30 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
               </span>
             </div>
 
-            {/* Search */}
-            <div style={{ marginBottom: 12 }}>
+            {/* Search + actions toolbar */}
+            <div style={{ marginBottom: 12, display: "flex", gap: 8, alignItems: "stretch" }}>
               <input value={reconSearch} onChange={e => setReconSearch(e.target.value)}
                 placeholder="Search by rego, card number, driver, station..."
                 style={{
-                  width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #e2e8f0",
+                  flex: 1, padding: "9px 12px", borderRadius: 8, border: "1px solid #e2e8f0",
                   fontSize: 13, fontFamily: "inherit", outline: "none", color: "#0f172a",
                 }}
                 onFocus={e => e.target.style.borderColor = "#22c55e"}
                 onBlur={e => e.target.style.borderColor = "#e2e8f0"}
               />
+              <button
+                onClick={exportReconciliation}
+                disabled={displayRows.length === 0}
+                title={displayRows.length === 0 ? "Nothing to export yet" : "Download a side-by-side Excel comparison of the current view"}
+                style={{
+                  padding: "9px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+                  background: displayRows.length === 0 ? "#f1f5f9" : "#0f766e",
+                  color: displayRows.length === 0 ? "#94a3b8" : "white",
+                  border: `1px solid ${displayRows.length === 0 ? "#e2e8f0" : "#0f766e"}`,
+                  cursor: displayRows.length === 0 ? "not-allowed" : "pointer",
+                  fontFamily: "inherit", whiteSpace: "nowrap",
+                }}
+              >{"\uD83D\uDCCA"} Export Excel</button>
             </div>
 
             {/* ── Dual spreadsheet layout ──────────────────────────────── */}
