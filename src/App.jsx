@@ -3741,6 +3741,9 @@ export default function App() {
   const [viewingReceipt, setViewingReceipt] = useState(null); // entry ID to view receipt
   const [confirmAction, setConfirmAction] = useState(null);
   const [addVehicle, setAddVehicle] = useState({ rego: "", div: "Tree", type: "Ute", name: "", owner: "", fuel: "Diesel" });
+  // Form state for the "Teach AI a Fleet Card" settings card — lets admin
+  // pre-register a rego → card mapping so the scanner can't misread it.
+  const [addCard, setAddCard] = useState({ rego: "", cardNumber: "", driver: "", vehicleRego: "" });
   const [fleetCardTxns, setFleetCardTxns] = useState([]); // imported fleet card transactions
   const [reconFilter, setReconFilter] = useState("all"); // "all" | "matched" | "scan_error" | "missing" | "app_only"
   const [reconSearch, setReconSearch] = useState("");
@@ -12650,7 +12653,22 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
 
         {/* Learned Card Corrections — admin section showing what the system has learned */}
         {isAdmin && (() => {
-          const mappingEntries = Object.entries(learnedCardMappings)
+          // Multiple keys often point at the same target — manual entries
+          // are stored under both a rego-key and the full-card-key; auto-
+          // learned entries can have full-card + legacy-suffix keys. Dedupe
+          // by (correctRego, correctCard) so the admin sees one row per
+          // taught card. Prefer entries with higher confirmCount so the
+          // "most trusted" representation wins the display slot.
+          const rawMappingEntries = Object.entries(learnedCardMappings);
+          const seenByTarget = new Map();
+          for (const [key, m] of rawMappingEntries) {
+            const uniqKey = `${(m?.correctRego || "").toUpperCase()}|${(m?.correctCard || "").replace(/\s/g, "")}`;
+            const prev = seenByTarget.get(uniqKey);
+            if (!prev || (m?.confirmCount || 0) > (prev[1].confirmCount || 0)) {
+              seenByTarget.set(uniqKey, [key, m]);
+            }
+          }
+          const mappingEntries = [...seenByTarget.values()]
             .sort(([, a], [, b]) => (a.correctRego || "").localeCompare(b.correctRego || ""));
           if (mappingEntries.length === 0) return null;
           return (
@@ -12685,9 +12703,18 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                   <tbody>
                     {mappingEntries.map(([key, m]) => (
                       <tr key={key}>
-                        <td style={{ fontWeight: 600, color: "#0f172a", fontSize: 12 }}>{m.correctRego || "\u2014"}</td>
+                        <td style={{ fontWeight: 600, color: "#0f172a", fontSize: 12 }}>
+                          {m.correctRego || "\u2014"}
+                          {m.manual && (
+                            <span style={{
+                              marginLeft: 6, padding: "1px 6px", fontSize: 9, fontWeight: 700,
+                              background: "#e0f7fa", color: "#0891b2", border: "1px solid #7dd3fc",
+                              borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.04em",
+                            }}>Manual</span>
+                          )}
+                        </td>
                         <td style={{ color: "#dc2626", fontSize: 11, fontFamily: "monospace" }}>
-                          {m.rawCard ? `...${m.rawCard.slice(-8)}` : m.rawRego || key}
+                          {m.manual ? <span style={{ color: "#94a3b8", fontStyle: "italic" }}>n/a</span> : (m.rawCard ? `...${m.rawCard.slice(-8)}` : m.rawRego || key)}
                         </td>
                         <td style={{ color: "#16a34a", fontSize: 11, fontFamily: "monospace", fontWeight: 600 }}>
                           ...{m.correctCard?.slice(-8) || "?"}
@@ -12697,7 +12724,19 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                         </td>
                         <td>
                           <button onClick={() => {
-                            const { [key]: _, ...rest } = learnedCardMappings;
+                            // Remove every key whose target matches this row's
+                            // (correctRego, correctCard) so manual entries
+                            // stored under both rego + card keys disappear
+                            // together rather than leaving a stale row.
+                            const targetRego = (m.correctRego || "").toUpperCase();
+                            const targetCard = (m.correctCard || "").replace(/\s/g, "");
+                            const rest = Object.fromEntries(
+                              Object.entries(learnedCardMappings).filter(([, v]) => {
+                                const vRego = (v?.correctRego || "").toUpperCase();
+                                const vCard = (v?.correctCard || "").replace(/\s/g, "");
+                                return !(vRego === targetRego && vCard === targetCard);
+                              })
+                            );
                             persistCardMappings(rest);
                             showToast("Correction removed");
                           }} title="Remove this correction" style={{
@@ -12854,6 +12893,132 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             }
           })} style={{ padding: "8px 16px", background: "#faf5ff", color: "#7c3aed", border: "1px solid #e9d5ff", borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}>Reset AI learning</button>
         </div>
+      </div>
+
+      {/* Teach AI a Fleet Card — pre-register a rego → card-number mapping */}
+      <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, marginBottom: 16 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#0891b2", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>{"\uD83D\uDCB3"} Teach AI a Fleet Card</div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
+          Pre-teach a card so the scanner can't misread it. Next time this rego is scanned, it's forced to map to the 16-digit number below — overrides fuzzy matching entirely.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <div>
+            <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Fleet Card Rego *</label>
+            <input
+              value={addCard.rego}
+              onChange={e => setAddCard(c => ({ ...c, rego: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 7) }))}
+              placeholder="e.g. DF25LB"
+              style={{
+                width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13,
+                outline: "none", fontFamily: "inherit", color: "#0f172a", textTransform: "uppercase",
+              }}
+              onFocus={e => e.target.style.borderColor = "#0891b2"}
+              onBlur={e => e.target.style.borderColor = "#e2e8f0"}
+            />
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>16-digit Card Number *</label>
+            <input
+              value={addCard.cardNumber}
+              onChange={e => setAddCard(c => ({ ...c, cardNumber: e.target.value.replace(/[^0-9]/g, "").slice(0, 16) }))}
+              placeholder="e.g. 7034305117002350"
+              inputMode="numeric"
+              style={{
+                width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13,
+                outline: "none", fontFamily: "monospace", color: "#0f172a", letterSpacing: "0.05em",
+              }}
+              onFocus={e => e.target.style.borderColor = "#0891b2"}
+              onBlur={e => e.target.style.borderColor = "#e2e8f0"}
+            />
+            {addCard.cardNumber && addCard.cardNumber.length !== 16 && (
+              <div style={{ fontSize: 10, color: "#b45309", marginTop: 2 }}>{addCard.cardNumber.length} / 16 digits</div>
+            )}
+            {addCard.cardNumber.length === 16 && !addCard.cardNumber.startsWith("7034") && (
+              <div style={{ fontSize: 10, color: "#dc2626", marginTop: 2 }}>Fleet card numbers always start with 7034</div>
+            )}
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Driver (optional)</label>
+            <input
+              value={addCard.driver}
+              onChange={e => setAddCard(c => ({ ...c, driver: e.target.value }))}
+              placeholder="e.g. Kyle Osborne"
+              style={{
+                width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13,
+                outline: "none", fontFamily: "inherit", color: "#0f172a",
+              }}
+              onFocus={e => e.target.style.borderColor = "#0891b2"}
+              onBlur={e => e.target.style.borderColor = "#e2e8f0"}
+            />
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>
+              Vehicle Rego <span style={{ color: "#94a3b8", fontWeight: 400 }}>(only if card is embossed with a different rego)</span>
+            </label>
+            <input
+              value={addCard.vehicleRego}
+              onChange={e => setAddCard(c => ({ ...c, vehicleRego: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 7) }))}
+              placeholder="leave blank in 99% of cases"
+              style={{
+                width: "100%", padding: "8px 10px", borderRadius: 7, border: "1px solid #e2e8f0", fontSize: 13,
+                outline: "none", fontFamily: "inherit", color: "#0f172a", textTransform: "uppercase",
+              }}
+              onFocus={e => e.target.style.borderColor = "#0891b2"}
+              onBlur={e => e.target.style.borderColor = "#e2e8f0"}
+            />
+          </div>
+        </div>
+        <button onClick={() => {
+          const cardRego = addCard.rego.trim().toUpperCase();
+          const cardNumber = addCard.cardNumber.replace(/\s/g, "");
+          const vehicleRego = addCard.vehicleRego.trim().toUpperCase();
+          const driver = addCard.driver.trim();
+          if (!cardRego || cardRego.length < 2) { showToast("Enter the fleet card rego", "warn"); return; }
+          if (cardNumber.length !== 16) { showToast("Card number must be exactly 16 digits", "warn"); return; }
+          if (!cardNumber.startsWith("7034")) { showToast("Fleet card numbers always start with 7034", "warn"); return; }
+
+          // Drop any existing mappings pointing at this rego so we don't
+          // accumulate stale rawCard-keyed entries when admin re-teaches it.
+          const cleaned = Object.fromEntries(
+            Object.entries(learnedCardMappings).filter(([_k, v]) =>
+              (v?.correctRego || "").toUpperCase() !== cardRego
+            )
+          );
+          const now = new Date().toISOString();
+          const mapping = {
+            correctCard: cardNumber,
+            correctRego: cardRego,
+            rawCard: cardNumber,
+            rawRego: cardRego,
+            learnedAt: now,
+            confirmCount: 99, // manual entries are trusted immediately
+            manual: true,
+            ...(driver ? { driver } : {}),
+          };
+          // Store under BOTH the rego key (catches scans that only surface a rego)
+          // AND the full card number (catches scans where the full card digits
+          // are read but the rego is unreadable).
+          const next = {
+            ...cleaned,
+            [`rego_${cardRego}`]: mapping,
+            [cardNumber]: mapping,
+          };
+          persistCardMappings(next);
+
+          // Also register in learnedDB so later lookups + Cards tab find it.
+          const targetRego = vehicleRego || cardRego;
+          const existing = learnedDB[targetRego] || {};
+          const learnedUpdate = { ...existing, c: cardNumber };
+          if (driver) learnedUpdate.dr = driver;
+          persistLearned({ ...learnedDB, [targetRego]: learnedUpdate });
+
+          showToast(`Fleet card ${cardRego} \u2192 \u2026${cardNumber.slice(-8)} saved`);
+          setAddCard({ rego: "", cardNumber: "", driver: "", vehicleRego: "" });
+        }} style={{
+          marginTop: 12, padding: "10px 20px", borderRadius: 8, fontSize: 13, fontWeight: 700,
+          cursor: "pointer", fontFamily: "inherit",
+          background: "#0891b2", color: "white", border: "none", width: "100%",
+        }}>Teach AI this Card</button>
       </div>
 
       {/* Add Vehicle to Learned DB */}
