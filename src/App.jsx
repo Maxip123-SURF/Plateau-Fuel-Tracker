@@ -11669,10 +11669,12 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     });
 
     // Uniform row height so the two tables visually align side-by-side.
-    const BASE_ROW_H = 40;
+    // Values tuned for the wide-container reconciliation layout — plenty of
+    // breathing room now that the view fills the viewport on desktop.
+    const BASE_ROW_H = 46;
     const cellStyle = {
-      padding: "0 2px",
-      fontSize: 11,
+      padding: "0 4px",
+      fontSize: 12,
       color: "#0f172a",
       verticalAlign: "middle",
       borderBottom: "1px solid #eef2f6",
@@ -11680,8 +11682,8 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     };
     const inputStyle = {
       width: "100%",
-      padding: "6px 6px",
-      fontSize: 11,
+      padding: "8px 8px",
+      fontSize: 12,
       border: "1px solid transparent",
       background: "transparent",
       borderRadius: 4,
@@ -11872,16 +11874,16 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                     <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
                       <thead>
                         <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 22 }}></th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 76 }}>Date</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 48 }}>Time</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 64 }}>Rego</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Station</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 78 }}>Product</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 58, textAlign: "right" }}>L</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 52, textAlign: "right" }}>$/L</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 70, textAlign: "right" }}>Total</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 24 }}></th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 22 }}></th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 76 }}>Date</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 48 }}>Time</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 64 }}>Rego</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Station</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 78 }}>Product</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 58, textAlign: "right" }}>L</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 52, textAlign: "right" }}>$/L</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 70, textAlign: "right" }}>Total</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 24 }}></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -11953,16 +11955,16 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                     <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
                       <thead>
                         <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 22 }}></th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 76 }}>Date</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 64 }}>Rego</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Driver</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Station</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 62 }}>Fuel</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 58, textAlign: "right" }}>L</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 52, textAlign: "right" }}>$/L</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 70, textAlign: "right" }}>Total</th>
-                          <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 36, textAlign: "center" }}></th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 22 }}></th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 76 }}>Date</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 64 }}>Rego</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Driver</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Station</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 62 }}>Fuel</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 58, textAlign: "right" }}>L</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 52, textAlign: "right" }}>$/L</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 70, textAlign: "right" }}>Total</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 36, textAlign: "center" }}></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -12886,7 +12888,19 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         </div>
       )}
 
-      <div style={{ maxWidth: (view === "data" || view === "dashboard" || view === "cards" || view === "drivers" || view === "reconcile") ? 960 : 520, margin: "0 auto", padding: "24px 16px", transition: "max-width 0.3s" }}>
+      <div style={{
+        // Reconcile is an admin-only desktop workflow with two side-by-side
+        // spreadsheets that earn every horizontal pixel — lift its cap well
+        // above the other admin views. The 2400px ceiling keeps ultra-wide
+        // monitors from stretching rows unreadably.
+        maxWidth: view === "reconcile"
+          ? "min(100%, 2400px)"
+          : (view === "data" || view === "dashboard" || view === "cards" || view === "drivers") ? 960
+          : 520,
+        margin: "0 auto",
+        padding: view === "reconcile" ? "24px 20px" : "24px 16px",
+        transition: "max-width 0.3s",
+      }}>
         {view === "submit" && (
           <>
             {step < 4 && <StepBar step={step} />}
