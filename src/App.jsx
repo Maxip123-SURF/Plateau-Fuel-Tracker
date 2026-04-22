@@ -3754,9 +3754,18 @@ export default function App() {
   const [expandedFleetVehicle, setExpandedFleetVehicle] = useState(null); // rego expanded in dashboard fleet table
   const [pendingExtraEntries, setPendingExtraEntries] = useState(null); // auto-detected extra receipt lines after submission
   const [showAddVehicleData, setShowAddVehicleData] = useState(false);
-  const [dashPeriod, setDashPeriod] = useState("monthly"); // "daily" | "weekly" | "monthly" | "custom" | "all"
-  const [dashDate, setDashDate] = useState(() => new Date().toISOString().slice(0, 10)); // YYYY-MM-DD
-  const [dashDateEnd, setDashDateEnd] = useState(() => new Date().toISOString().slice(0, 10));
+  const [dashPeriod, setDashPeriod] = useState("daily"); // "daily" | "weekly" | "monthly" | "custom" | "all"
+  // Use Sydney local date (not UTC) so opening the dashboard shows today's
+  // entries — toISOString() can return yesterday's date during early-morning
+  // Sydney hours because it returns UTC.
+  const [dashDate, setDashDate] = useState(() => {
+    const { y, m, d } = sydneyTodayYMD();
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  });
+  const [dashDateEnd, setDashDateEnd] = useState(() => {
+    const { y, m, d } = sydneyTodayYMD();
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  });
   const [expandedRego, setExpandedRego] = useState(null);
   const [serviceModal, setServiceModal] = useState(null);
   const [showFlags, setShowFlags] = useState(false);
