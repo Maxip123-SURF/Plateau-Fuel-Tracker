@@ -12347,21 +12347,109 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
               </div>
             )}
 
-            {/* Clear button */}
-            <div style={{ marginTop: 16, textAlign: "center" }}>
-              <button onClick={() => setConfirmAction({
-                message: `Clear all ${fleetCardTxns.length} imported fleet card transactions? This cannot be undone.`,
-                onConfirm: async () => {
-                  setFleetCardTxns([]);
-                  await db.saveFleetCardTransactions([]);
-                  setConfirmAction(null);
-                  showToast("Fleet card transactions cleared");
-                }
-              })} style={{
-                padding: "8px 16px", background: "#fef2f2", color: "#b91c1c", border: "1px solid #fca5a5",
-                borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit",
-              }}>Clear all imported transactions</button>
-            </div>
+            {/* ── Scoped clear controls ────────────────────────────────
+                The old single "Clear all" button was a nuclear-only option —
+                too easy to wipe months of imported data when the admin just
+                wanted to reset the current range. Three explicit scopes give
+                the admin control over WHAT gets removed:
+                  1. In date range  — only txns dated {from} → {to}
+                  2. Visible only   — respects date range + filter + search
+                  3. All            — everything ever imported (nuclear)
+                App receipt entries (`entries`) are NEVER touched by any of
+                these — only the imported FleetCard report rows. */}
+            {(() => {
+              const visibleTxnIds = new Set(searched.map(r => r.txn?.id).filter(Boolean));
+              const visibleCount = visibleTxnIds.size;
+              const rangeCount = inRangeTxns.length;
+              const allCount = fleetCardTxns.length;
+              const rangeLabel = (reconFromDate && reconToDate)
+                ? `${reconFromDate} \u2192 ${reconToDate}`
+                : "the selected range";
+              const btnBase = {
+                padding: "8px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                fontFamily: "inherit", whiteSpace: "nowrap",
+              };
+              const btnActive = (color, bg, border) => ({
+                ...btnBase, background: bg, color, border: `1px solid ${border}`, cursor: "pointer",
+              });
+              const btnDisabled = {
+                ...btnBase, background: "#f1f5f9", color: "#cbd5e1",
+                border: "1px solid #e2e8f0", cursor: "not-allowed",
+              };
+              return (
+                <div style={{
+                  marginTop: 16, padding: "12px 14px",
+                  background: "#fafafa", border: "1px solid #e5e7eb", borderRadius: 10,
+                }}>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8, textAlign: "center", lineHeight: 1.55 }}>
+                    Clear imported FleetCard report rows.{" "}
+                    <strong style={{ color: "#334155" }}>App receipt entries are never affected</strong> {"\u00B7"}{" "}
+                    Use search + filter above to narrow what <em>Visible only</em> removes.
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
+                    {/* ── Clear in date range ─────────────────────────── */}
+                    <button
+                      disabled={rangeCount === 0}
+                      title={rangeCount === 0
+                        ? "No imported transactions fall within this date range"
+                        : `Remove ${rangeCount} imported transaction${rangeCount !== 1 ? "s" : ""} dated ${rangeLabel}`}
+                      onClick={() => setConfirmAction({
+                        message: `Remove ${rangeCount} imported fleet card transaction${rangeCount !== 1 ? "s" : ""} dated ${rangeLabel}? App receipts are not touched. This cannot be undone.`,
+                        onConfirm: async () => {
+                          const next = fleetCardTxns.filter(t => !inRange(t.date));
+                          setFleetCardTxns(next);
+                          try { await db.saveFleetCardTransactions(next); } catch (_) {}
+                          setConfirmAction(null);
+                          showToast(`Cleared ${rangeCount} transaction${rangeCount !== 1 ? "s" : ""} in date range`);
+                        },
+                      })}
+                      style={rangeCount === 0 ? btnDisabled : btnActive("#b45309", "#fffbeb", "#fcd34d")}
+                    >
+                      {"\uD83D\uDCC5"} Clear date range ({rangeCount})
+                    </button>
+                    {/* ── Clear visible only ──────────────────────────── */}
+                    <button
+                      disabled={visibleCount === 0}
+                      title={visibleCount === 0
+                        ? "No transactions currently visible"
+                        : `Remove the ${visibleCount} transaction${visibleCount !== 1 ? "s" : ""} shown in the FleetCard Report panel (respects filter + search)`}
+                      onClick={() => setConfirmAction({
+                        message: `Remove ${visibleCount} imported fleet card transaction${visibleCount !== 1 ? "s" : ""} currently visible in this view? App receipts are not touched. This cannot be undone.`,
+                        onConfirm: async () => {
+                          const next = fleetCardTxns.filter(t => !visibleTxnIds.has(t.id));
+                          setFleetCardTxns(next);
+                          try { await db.saveFleetCardTransactions(next); } catch (_) {}
+                          setConfirmAction(null);
+                          showToast(`Cleared ${visibleCount} visible transaction${visibleCount !== 1 ? "s" : ""}`);
+                        },
+                      })}
+                      style={visibleCount === 0 ? btnDisabled : btnActive("#0369a1", "#f0f9ff", "#7dd3fc")}
+                    >
+                      {"\uD83D\uDC41"} Clear visible only ({visibleCount})
+                    </button>
+                    {/* ── Clear all (nuclear) ─────────────────────────── */}
+                    <button
+                      disabled={allCount === 0}
+                      title={allCount === 0
+                        ? "Nothing to clear"
+                        : `Nuclear option: remove every imported fleet card transaction, across all dates (${allCount} total)`}
+                      onClick={() => setConfirmAction({
+                        message: `Remove ALL ${allCount} imported fleet card transaction${allCount !== 1 ? "s" : ""}, across every date? App receipts are not touched. This cannot be undone.`,
+                        onConfirm: async () => {
+                          setFleetCardTxns([]);
+                          try { await db.saveFleetCardTransactions([]); } catch (_) {}
+                          setConfirmAction(null);
+                          showToast(`Cleared all ${allCount} imported transaction${allCount !== 1 ? "s" : ""}`);
+                        },
+                      })}
+                      style={allCount === 0 ? btnDisabled : btnActive("#b91c1c", "#fef2f2", "#fca5a5")}
+                    >
+                      {"\uD83D\uDDD1"} Clear all ({allCount})
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
           </>
         )}
 
