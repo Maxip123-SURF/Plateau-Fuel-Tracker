@@ -11721,30 +11721,36 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     for (const r of results) pushResultRows(r);
     for (const g of appOnlyGroups) pushResultRows({ txn: null, group: g, status: "app_only", diff: null });
 
-    // Sort by date/time/rego, keeping splits of the same group adjacent. We
-    // sort by the group's first-split sort key, then splitIdx within group.
+    // Sort alphabetically by fleet-card rego (primary), then date/time so
+    // splits of the same group stay adjacent. Empty regos sort last so the
+    // "unknowns" don't clutter the top of each section.
     const sortKey = (r) => {
       const d = parseDate(r.txn?.date || r.group?.date) || 0;
       const t = r.txn?.time || "";
       // Prefer fleet-card rego (txn.rego / group.fleetCardRego) — that's the
       // authoritative matching key. Fall back to vehicle rego only if neither
       // side has a fleet-card rego.
-      const rego = r.txn?.rego || r.group?.fleetCardRego || r.group?.registration || "";
+      const rego = (r.txn?.rego || r.group?.fleetCardRego || r.group?.registration || "").toUpperCase();
       const groupId = r.group?.key || r.txn?.id || "";
       return { d, t, rego, groupId };
     };
     alignedRows.sort((a, b) => {
       const A = sortKey(a), B = sortKey(b);
+      // Alphabetical by rego — empties land at the bottom of each section
+      if (A.rego !== B.rego) {
+        if (!A.rego) return 1;
+        if (!B.rego) return -1;
+        return A.rego.localeCompare(B.rego);
+      }
       if (A.d !== B.d) return A.d - B.d;
       if (A.t !== B.t) return A.t.localeCompare(B.t);
-      if (A.rego !== B.rego) return A.rego.localeCompare(B.rego);
       if (A.groupId !== B.groupId) return A.groupId.localeCompare(B.groupId);
       return (a.splitIdx || 0) - (b.splitIdx || 0);
     });
 
-    // Apply filter + search. Splits inherit their group's status so filtering
-    // by e.g. "scan_error" keeps every split of a scan_error group visible.
-    const displayRows = alignedRows.filter(r => {
+    // Apply filter + search first. Splits inherit their group's status so
+    // filtering by e.g. "scan_error" keeps every split of that group visible.
+    const filteredBase = alignedRows.filter(r => {
       if (reconFilter !== "all" && r.status !== reconFilter) return false;
       if (!searchTerm) return true;
       return (
@@ -11760,6 +11766,35 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         normalizeCardNum(r.entry?.fleetCardNumber).includes(searchTerm)
       );
     });
+
+    // Split into two sections: exact matches at the top, everything else
+    // (scan errors / missing receipts / app-only receipts) in "Needs Review"
+    // below. Admin can then focus on the clean pile first, then work through
+    // exceptions. Splits are kept together because each row already carries
+    // its parent group's status.
+    const exactRows  = filteredBase.filter(r => r.status === "matched");
+    const reviewRows = filteredBase.filter(r => r.status !== "matched");
+
+    // Section headers only appear in the "All" view. When the user has
+    // filtered to a single status (Matched / Scan Error / Missing / App Only),
+    // the filter button itself is the header — another banner would be noise.
+    const showSections = reconFilter === "all" && exactRows.length > 0 && reviewRows.length > 0;
+
+    const displayRows = showSections
+      ? [
+          { __section: "exact",  label: `Exact Matches · ${exactRows.length}` },
+          ...exactRows,
+          { __section: "review", label: `Needs Review · ${reviewRows.length}` },
+          ...reviewRows,
+        ]
+      : filteredBase;
+
+    // Styling for the section divider rows — mirrors the on-screen status
+    // colours so the two sections feel connected to the Matched / warning KPIs.
+    const sectionRowStyle = {
+      exact:  { bg: "#dcfce7", border: "#4ade80", text: "#14532d" },
+      review: { bg: "#fef3c7", border: "#f59e0b", text: "#78350f" },
+    };
 
     // Uniform row height so the two tables visually align side-by-side.
     // Values tuned for the wide-container reconciliation layout — plenty of
@@ -11887,13 +11922,29 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         const headerColsRowIdx = aoa.length - 1;
         const firstDataRowIdx = aoa.length; // data starts at this 0-based row
 
-        // Track status per data row so we can style each appropriately
-        const dataRowStatuses = [];
+        // Track each emitted row so we can style it correctly in the second pass.
+        // Section banner rows (the "Exact Matches" / "Needs Review" dividers)
+        // get a full-width merge + coloured banner; data rows get their usual
+        // per-status tint. Keeping the meta array flat sidesteps any row-index
+        // arithmetic if sections are added/removed later.
+        const rowMeta = []; // { kind: "section"|"data", rowIdx, status?, sectionKind? }
 
         for (const r of displayRows) {
+          if (r.__section) {
+            // Echo the banner text on BOTH sides so each panel is self-labelled
+            // when an admin hides a column pane in Excel.
+            const bannerIcon = r.__section === "exact" ? "\u2713" : "\u26A0";
+            const bannerText = `${bannerIcon}  ${r.label}`;
+            const rowArr = new Array(25).fill("");
+            rowArr[0] = bannerText;
+            rowArr[12] = bannerText;
+            aoa.push(rowArr);
+            rowMeta.push({ kind: "section", rowIdx: aoa.length - 1, sectionKind: r.__section });
+            continue;
+          }
+
           const st = statusStyle[r.status];
           const statusLabel = st?.title || r.status;
-          dataRowStatuses.push(r.status);
 
           let fleetCardCols;
           if (r.txn && r.splitIdx === 0) {
@@ -11941,6 +11992,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           }
 
           aoa.push([...fleetCardCols, "", ...appCols]);
+          rowMeta.push({ kind: "data", rowIdx: aoa.length - 1, status: r.status });
         }
 
         const ws = XLSXStyle.utils.aoa_to_sheet(aoa);
@@ -11999,16 +12051,33 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           });
         }
 
-        // ── Data rows — colour by status ──
-        for (let i = 0; i < dataRowStatuses.length; i++) {
-          const status = dataRowStatuses[i];
-          const c = EXCEL_STATUS[status] || EXCEL_STATUS.matched;
-          const rowIdx = firstDataRowIdx + i;
+        // ── Data + section banner rows — colour each by role ──
+        // Section banner styling — uses the same palette as the on-screen
+        // dividers (pale green for exact, pale amber for review).
+        const SECTION_STYLE = {
+          exact:  { fill: "FFDCFCE7", text: "FF14532D" },
+          review: { fill: "FFFEF3C7", text: "FF78350F" },
+        };
+        for (const m of rowMeta) {
+          if (m.kind === "section") {
+            const s = SECTION_STYLE[m.sectionKind];
+            for (let col = 0; col < numCols; col++) {
+              if (col === 11) continue; // separator column stays blank
+              setStyle(m.rowIdx, col, {
+                fill: { patternType: "solid", fgColor: { rgb: s.fill } },
+                font: { bold: true, sz: 11, color: { rgb: s.text } },
+                alignment: { horizontal: "left", vertical: "center" },
+                border: thinBorder,
+              });
+            }
+            continue;
+          }
+          const c = EXCEL_STATUS[m.status] || EXCEL_STATUS.matched;
           for (let col = 0; col < numCols; col++) {
             if (col === 11) continue; // separator stays transparent
             // Status columns (0 and 12) get the darker accent tint + bold
             const isStatusCol = col === 0 || col === 12;
-            setStyle(rowIdx, col, {
+            setStyle(m.rowIdx, col, {
               fill: { patternType: "solid", fgColor: { rgb: isStatusCol ? c.accent : c.fill } },
               font: { bold: isStatusCol, sz: 10, color: { rgb: isStatusCol ? c.text : "FF0F172A" } },
               alignment: {
@@ -12065,6 +12134,12 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           ...Array.from({ length: textRowCount }, (_, i) => ({ s: { r: i, c: 0 }, e: { r: i, c: numCols - 1 } })),
           { s: { r: sectionRowIdx, c: 0 },  e: { r: sectionRowIdx, c: 10 } }, // "— FLEET CARD REPORT —"
           { s: { r: sectionRowIdx, c: 12 }, e: { r: sectionRowIdx, c: numCols - 1 } }, // "— APP ENTRIES —"
+          // Section banner rows (Exact Matches / Needs Review) — merge each
+          // side so the banner text reads as one continuous label per panel.
+          ...rowMeta.filter(m => m.kind === "section").flatMap(m => [
+            { s: { r: m.rowIdx, c: 0 },  e: { r: m.rowIdx, c: 10 } },
+            { s: { r: m.rowIdx, c: 12 }, e: { r: m.rowIdx, c: numCols - 1 } },
+          ]),
         ];
         // Freeze the header area (below the column-headers row) so scrolling
         // keeps the labels and title in view.
@@ -12078,7 +12153,8 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         const filterTag = reconFilter !== "all" ? `_${reconFilter}` : "";
         const filename = `Reconciliation_${fileRange}${filterTag}.xlsx`;
         XLSXStyle.writeFile(wb, filename);
-        showToast(`Exported ${displayRows.length} row${displayRows.length !== 1 ? "s" : ""} to ${filename}`);
+        const dataRowCount = rowMeta.filter(m => m.kind === "data").length;
+        showToast(`Exported ${dataRowCount} row${dataRowCount !== 1 ? "s" : ""} to ${filename}`);
       } catch (err) {
         console.error("Reconciliation export failed:", err);
         showToast("Export failed: " + err.message, "warn");
@@ -12252,6 +12328,18 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                       </thead>
                       <tbody>
                         {displayRows.map((r, i) => {
+                          // Section divider — spans the full row in both tables so
+                          // the left/right panels stay visually aligned.
+                          if (r.__section) {
+                            const sec = sectionRowStyle[r.__section];
+                            return (
+                              <tr key={`L-sec-${r.__section}`} style={{ background: sec.bg, borderTop: `2px solid ${sec.border}`, borderBottom: `2px solid ${sec.border}` }}>
+                                <td colSpan={10} style={{ ...cellStyle, padding: "10px 12px", fontSize: 11, fontWeight: 700, color: sec.text, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+                                  {r.__section === "exact" ? "\u2713" : "\u26A0"} {r.label}
+                                </td>
+                              </tr>
+                            );
+                          }
                           const st = statusStyle[r.status] || statusStyle.matched;
                           const rowBg = i % 2 === 0 ? st.bg : st.bgAlt;
                           // App-only row: txn missing
@@ -12334,6 +12422,18 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                       </thead>
                       <tbody>
                         {displayRows.map((r, i) => {
+                          // Section divider — mirrors the one in the FleetCard
+                          // table so both sides visually align at the split.
+                          if (r.__section) {
+                            const sec = sectionRowStyle[r.__section];
+                            return (
+                              <tr key={`R-sec-${r.__section}`} style={{ background: sec.bg, borderTop: `2px solid ${sec.border}`, borderBottom: `2px solid ${sec.border}` }}>
+                                <td colSpan={11} style={{ ...cellStyle, padding: "10px 12px", fontSize: 11, fontWeight: 700, color: sec.text, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+                                  {r.__section === "exact" ? "\u2713" : "\u26A0"} {r.label}
+                                </td>
+                              </tr>
+                            );
+                          }
                           const st = statusStyle[r.status] || statusStyle.matched;
                           const rowBg = i % 2 === 0 ? st.bg : st.bgAlt;
                           // Missing-receipt row: txn present, no group/entry
