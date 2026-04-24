@@ -9484,7 +9484,11 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                     <table className="data-table">
                       <thead>
                         <tr style={{ background: divColor.bg }}>
-                          {["Driver", "PT / Equipment", "Station", "Fleet Card", "Card Rego", "Date", "Litres", "$/L", "Cost", "Notes", ""].map(h => (
+                          {/* Card Rego leads the row now — mirrors the vehicle-entries
+                              tables where the rego is the first column. Makes it
+                              easier to scan who the expense belongs to than hunting
+                              for the rego mid-row. */}
+                          {["Card Rego", "Driver", "PT / Equipment", "Station", "Fleet Card", "Date", "Litres", "$/L", "Cost", "Notes", ""].map(h => (
                             <th key={h} style={{ color: divColor.text, borderBottom: `2px solid ${divColor.border}` }}>{h}</th>
                           ))}
                         </tr>
@@ -9492,11 +9496,11 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                       <tbody>
                         {divEntries.map(e => (
                           <tr key={e.id} style={{ background: "white" }}>
+                            <td style={{ fontWeight: 600, color: "#374151", fontSize: 10 }}>{e.cardRego || lookupRegoByCardNumber(e.fleetCardNumber) || "\u2014"}</td>
                             <td style={{ fontWeight: 500, color: "#374151" }}>{e.driverName || "\u2014"}</td>
                             <td style={{ fontWeight: 600, color: divColor.text }}>{e.equipment || "\u2014"}</td>
                             <td style={{ color: "#64748b" }}>{e.station || "\u2014"}</td>
                             <td style={{ color: "#374141", fontSize: 10 }}>{formatCardNumber(e.fleetCardNumber) || "\u2014"}</td>
-                            <td style={{ fontWeight: 600, color: "#374151" }}>{e.cardRego || "\u2014"}</td>
                             <td style={{ color: "#374151" }}>{e.date || "\u2014"}</td>
                             <td style={{ color: "#374151" }}>{e.litres ? `${e.litres}L` : "\u2014"}</td>
                             <td style={{ color: "#374151" }}>{e.pricePerLitre ? `$${e.pricePerLitre}` : "\u2014"}</td>
