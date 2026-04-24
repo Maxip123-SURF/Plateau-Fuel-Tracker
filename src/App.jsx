@@ -10134,6 +10134,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
               <table className="data-table">
                 <thead>
                   <tr style={{ background: "#fffbeb" }}>
+                    {/* Card Rego leads the row so each claim is immediately
+                        attributable to a specific fleet-card holder — same
+                        format as the vehicle-entry tables elsewhere. */}
+                    <th style={{ color: "#854d0e", borderBottom: "1px solid #fde047" }}>Card Rego</th>
                     <th style={{ color: "#854d0e", borderBottom: "1px solid #fde047" }}>Date</th>
                     <th style={{ color: "#854d0e", borderBottom: "1px solid #fde047" }}>Driver</th>
                     <th style={{ color: "#854d0e", borderBottom: "1px solid #fde047" }}>Division</th>
@@ -10149,6 +10153,9 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                 <tbody>
                   {periodOther.map(e => (
                     <tr key={e.id}>
+                      <td style={{ fontWeight: 600, color: "#0f172a", fontSize: 11 }}>
+                        {e.cardRego || lookupRegoByCardNumber(e.fleetCardNumber) || "\u2014"}
+                      </td>
                       <td style={{ color: "#374151", fontSize: 11 }}>{e.date || "\u2014"}</td>
                       <td style={{ color: "#374151", fontSize: 11 }}>{e.driverName || "\u2014"}</td>
                       <td style={{ fontSize: 11 }}>
@@ -10178,6 +10185,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                     </tr>
                   ))}
                   <tr style={{ background: "#fffbeb", borderTop: "2px solid #fde047" }}>
+                    <td></td>
                     <td style={{ fontWeight: 700, color: "#854d0e" }}>TOTAL</td>
                     <td></td><td></td><td></td>
                     <td style={{ fontWeight: 700, color: "#854d0e" }}>{periodOther.reduce((s, e) => s + (e.litres || 0), 0) > 0 ? periodOther.reduce((s, e) => s + (e.litres || 0), 0).toFixed(1) + "L" : ""}</td>
