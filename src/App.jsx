@@ -4046,6 +4046,13 @@ export default function App() {
   // pre-register a rego → card mapping so the scanner can't misread it.
   const [addCard, setAddCard] = useState({ rego: "", cardNumber: "", driver: "", vehicleRego: "" });
   const [fleetCardTxns, setFleetCardTxns] = useState([]); // imported fleet card transactions
+  // Soft-delete bin: deleted entries go here (with a _deletedAt timestamp)
+  // instead of being hard-deleted. Admin can restore from the Data tab or
+  // permanently purge. Auto-purged after TRASH_RETENTION_MS on app load.
+  const [trashEntries, setTrashEntries] = useState([]);
+  const trashEntriesRef = useRef(trashEntries);
+  useEffect(() => { trashEntriesRef.current = trashEntries; }, [trashEntries]);
+  const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
   const [reconFilter, setReconFilter] = useState("all"); // "all" | "matched" | "scan_error" | "missing" | "app_only"
   const [reconSearch, setReconSearch] = useState("");
   const [reconUploading, setReconUploading] = useState(false);
@@ -4209,13 +4216,14 @@ export default function App() {
     (async () => {
       try {
         // First, load local data (fast — already on this device)
-        const [eRes, kRes, sRes, lRes, rRes, pRes] = await Promise.all([
+        const [eRes, kRes, sRes, lRes, rRes, pRes, trRes] = await Promise.all([
           window.storage.get("fuel_entries").catch(() => null),
           window.storage.get("fuel_api_key").catch(() => null),
           window.storage.get("fuel_service_data").catch(() => null),
           window.storage.get("fuel_learned_db").catch(() => null),
           window.storage.get("fuel_resolved_flags").catch(() => null),
           window.storage.get("fuel_admin_passcode").catch(() => null),
+          window.storage.get("fuel_trash_entries").catch(() => null),
         ]);
         let localEntries = eRes?.value ? JSON.parse(eRes.value) : [];
         let localService = sRes?.value ? JSON.parse(sRes.value) : {};
@@ -4223,6 +4231,31 @@ export default function App() {
         if (kRes?.value) { setApiKey(kRes.value); setApiKeyInput(kRes.value); }
         if (lRes?.value) setLearnedDB(JSON.parse(lRes.value));
         if (pRes?.value) { setAdminPasscode(pRes.value); setPasscodeInput(pRes.value); }
+        // Load trash bin (soft-deleted entries) + auto-purge anything older
+        // than the retention window so the bin can't grow without bound.
+        if (trRes?.value) {
+          try {
+            const loaded = JSON.parse(trRes.value);
+            const now = Date.now();
+            const kept = [];
+            const expired = [];
+            for (const t of loaded) {
+              const ts = t?._deletedAt ? new Date(t._deletedAt).getTime() : now;
+              if (isNaN(ts) || now - ts > TRASH_RETENTION_MS) expired.push(t);
+              else kept.push(t);
+            }
+            if (expired.length > 0) {
+              // Wipe receipt images for entries that have expired out of
+              // the bin — they can never be restored, so the image is dead
+              // weight in storage.
+              for (const e of expired) { try { await deleteReceiptImage(e.id); } catch (_) {} }
+              try { await window.storage.set("fuel_trash_entries", JSON.stringify(kept)); } catch (_) {}
+              db.saveSetting("trash_entries", JSON.stringify(kept)).catch(() => {});
+              console.log(`[Trash] Auto-purged ${expired.length} entr${expired.length === 1 ? "y" : "ies"} past ${TRASH_RETENTION_MS / 86400000}-day retention`);
+            }
+            setTrashEntries(kept);
+          } catch (_) {}
+        }
         // Load learned card corrections + reconcile with current static DB
         // (admin edits to DRIVER_CARDS/REGO_DB must override stale learned values)
         try {
@@ -4278,6 +4311,23 @@ export default function App() {
           // Load learned corrections (self-learning system) from cloud
           db.loadSetting("learned_corrections").then(raw => {
             if (raw) { try { setLearnedCorrections(JSON.parse(raw)); } catch (_) {} }
+          }).catch(() => {});
+          // Load soft-delete bin from cloud. Kept separate from entries so
+          // if another device already deleted something, this device sees
+          // it in the bin and can restore it (or purge it forever).
+          db.loadSetting("trash_entries").then(raw => {
+            if (!raw) return;
+            try {
+              const loaded = JSON.parse(raw);
+              const now = Date.now();
+              const kept = loaded.filter(t => {
+                const ts = t?._deletedAt ? new Date(t._deletedAt).getTime() : now;
+                return !isNaN(ts) && now - ts <= TRASH_RETENTION_MS;
+              });
+              setTrashEntries(kept);
+              trashEntriesRef.current = kept;
+              try { window.storage.set("fuel_trash_entries", JSON.stringify(kept)); } catch (_) {}
+            } catch (_) {}
           }).catch(() => {});
           // Load learned DB (per-rego vehicle metadata) from cloud. Without this,
           // "Edit Vehicle" and similar admin edits stayed stuck on one device.
@@ -4501,6 +4551,16 @@ export default function App() {
     if (normChanged) {
       db.saveEntry(normChanged).catch(() => {});
     }
+  };
+
+  // persistTrash saves the soft-delete bin to both localStorage (instant
+  // restore even offline) and Supabase app_settings (so restore works from
+  // another device if someone deletes from the wrong machine).
+  const persistTrash = async (newTrash) => {
+    trashEntriesRef.current = newTrash;
+    setTrashEntries(newTrash);
+    try { await window.storage.set("fuel_trash_entries", JSON.stringify(newTrash)); } catch (_) {}
+    db.saveSetting("trash_entries", JSON.stringify(newTrash)).catch(() => {});
   };
 
   // persistService saves vehicle service data to both local and cloud
@@ -6052,15 +6112,28 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     return orphans;
   };
 
+  // Soft-delete: the entry moves to the Recently Deleted bin (trash) rather
+  // than being permanently erased. Admin can restore from there for the
+  // next 30 days, after which it's auto-purged. The row IS removed from
+  // Supabase's `entries` table immediately — the trash copy, kept in the
+  // `trash_entries` app_setting, is the authoritative record while in the
+  // bin. Receipt images are preserved until the trash entry is purged so
+  // restore brings back the full record.
   const deleteEntry = async (id) => {
     // Read from the ref, not the closure-captured `entries` — a Realtime
     // refresh between render and click would otherwise make us persist a
     // stale array and silently delete entries added on other devices.
     const entry = entriesRef.current.find(e => e.id === id);
+    if (!entry) return;
     const orphanFlags = collectOrphanFlagIds(entry);
+    // Stamp the entry with deletion metadata and push onto the top of the
+    // trash (newest-first ordering, same as everywhere else in the app).
+    const trashed = { ...entry, _deletedAt: new Date().toISOString() };
+    await persistTrash([trashed, ...trashEntriesRef.current]);
     await persist(entriesRef.current.filter(e => e.id !== id));
     db.deleteEntry(id).catch(() => {});
-    await deleteReceiptImage(id);
+    // NOTE: deliberately do NOT delete the receipt image — restore needs it.
+    // The image is wiped in purgeFromTrash / auto-purge instead.
     // Cleanup orphan flag resolutions so they can't silently auto-resolve a
     // future entry that happens to share this entry's rego+date+odo tuple.
     if (orphanFlags.length > 0) {
@@ -6069,7 +6142,27 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       await persistResolved(rest);
       orphanFlags.forEach(fid => db.deleteResolvedFlag(fid).catch(() => {}));
     }
-    showToast("Entry deleted");
+    showToast("Entry moved to Recently Deleted \u00B7 restore from the Data tab");
+  };
+
+  // Pull an entry back out of the trash and reinstate it. Strips the
+  // _deletedAt stamp and persists the entry back to Supabase.
+  const restoreFromTrash = async (id) => {
+    const trashed = trashEntriesRef.current.find(e => e.id === id);
+    if (!trashed) return;
+    // eslint-disable-next-line no-unused-vars
+    const { _deletedAt, ...restored } = trashed;
+    await persist([...entriesRef.current, restored], restored);
+    await persistTrash(trashEntriesRef.current.filter(e => e.id !== id));
+    showToast(`Restored entry for ${restored.registration || restored.equipment || "entry"}`);
+  };
+
+  // Permanently delete a trashed entry. Also wipes the receipt image so the
+  // storage quota isn't held by an un-restorable item.
+  const purgeFromTrash = async (id) => {
+    await persistTrash(trashEntriesRef.current.filter(e => e.id !== id));
+    try { await deleteReceiptImage(id); } catch (_) {}
+    showToast("Entry permanently deleted");
   };
 
   const updateEntry = async (updatedEntry) => {
@@ -9531,6 +9624,96 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             </>
           );
         })()}
+
+        {/* ── Recently Deleted ──────────────────────────────────────
+            Soft-deleted entries land here for 30 days before being
+            auto-purged. Admin can restore (puts the entry back into
+            the dashboard / reports) or delete permanently. Receipt
+            images are preserved until purge so restore brings back
+            the full record. */}
+        {trashEntries.length > 0 && (
+          <div style={{ marginTop: 28, background: "white", border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden" }}>
+            <div style={{
+              padding: "10px 14px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0",
+              display: "flex", alignItems: "center", gap: 10,
+            }}>
+              <span style={{ fontSize: 16 }}>{"\uD83D\uDDD1"}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>
+                  Recently Deleted {"\u00B7"} {trashEntries.length}
+                </div>
+                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 1 }}>
+                  Auto-purged after 30 days. Restore puts the entry back into all reports.
+                </div>
+              </div>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table className="data-table">
+                <thead>
+                  <tr style={{ background: "#fafafa" }}>
+                    <th style={{ color: "#64748b", borderBottom: "1px solid #e2e8f0" }}>Rego / Equipment</th>
+                    <th style={{ color: "#64748b", borderBottom: "1px solid #e2e8f0" }}>Driver</th>
+                    <th style={{ color: "#64748b", borderBottom: "1px solid #e2e8f0" }}>Date</th>
+                    <th style={{ color: "#64748b", borderBottom: "1px solid #e2e8f0" }}>Litres</th>
+                    <th style={{ color: "#64748b", borderBottom: "1px solid #e2e8f0" }}>Cost</th>
+                    <th style={{ color: "#64748b", borderBottom: "1px solid #e2e8f0" }}>Deleted</th>
+                    <th style={{ color: "#64748b", borderBottom: "1px solid #e2e8f0" }}>Expires</th>
+                    <th style={{ color: "#64748b", borderBottom: "1px solid #e2e8f0", width: 220 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...trashEntries]
+                    .sort((a, b) => new Date(b._deletedAt || 0) - new Date(a._deletedAt || 0))
+                    .map(t => {
+                      const deletedMs = new Date(t._deletedAt).getTime();
+                      const expiresMs = deletedMs + TRASH_RETENTION_MS;
+                      const daysLeft = Math.max(0, Math.ceil((expiresMs - Date.now()) / 86400000));
+                      const deletedAgo = (() => {
+                        const diffMs = Date.now() - deletedMs;
+                        const mins = Math.floor(diffMs / 60000);
+                        if (mins < 1) return "just now";
+                        if (mins < 60) return `${mins}m ago`;
+                        const hrs = Math.floor(mins / 60);
+                        if (hrs < 24) return `${hrs}h ago`;
+                        const days = Math.floor(hrs / 24);
+                        return `${days}d ago`;
+                      })();
+                      return (
+                        <tr key={t.id} style={{ background: "white" }}>
+                          <td style={{ fontWeight: 600, color: "#374151", fontSize: 11 }}>
+                            {t.registration || t.equipment || "\u2014"}
+                          </td>
+                          <td style={{ color: "#374151", fontSize: 11 }}>{t.driverName || "\u2014"}</td>
+                          <td style={{ color: "#64748b", fontSize: 11 }}>{t.date || "\u2014"}</td>
+                          <td style={{ color: "#64748b", fontSize: 11 }}>{t.litres != null ? `${t.litres}L` : "\u2014"}</td>
+                          <td style={{ color: "#16a34a", fontWeight: 600, fontSize: 11 }}>
+                            {t.totalCost != null ? `$${t.totalCost.toFixed(2)}` : "\u2014"}
+                          </td>
+                          <td style={{ color: "#64748b", fontSize: 10 }}>{deletedAgo}</td>
+                          <td style={{ color: daysLeft <= 3 ? "#b45309" : "#64748b", fontSize: 10, fontWeight: daysLeft <= 3 ? 600 : 400 }}>
+                            {daysLeft > 0 ? `${daysLeft}d` : "expires today"}
+                          </td>
+                          <td style={{ whiteSpace: "nowrap" }}>
+                            <button onClick={() => restoreFromTrash(t.id)} title="Restore to active entries" style={{
+                              padding: "4px 10px", marginRight: 6, borderRadius: 6, fontSize: 11, fontWeight: 600,
+                              background: "#f0fdf4", color: "#15803d", border: "1px solid #86efac", cursor: "pointer", fontFamily: "inherit",
+                            }}>{"\u21BA"} Restore</button>
+                            <button onClick={() => setConfirmAction({
+                              message: `Permanently delete the ${t.registration || t.equipment || "entry"} record from ${t.date || "unknown date"}?\n\nThis cannot be undone — even Restore won't bring it back.`,
+                              onConfirm: async () => { await purgeFromTrash(t.id); setConfirmAction(null); },
+                            })} title="Delete forever" style={{
+                              padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                              background: "#fef2f2", color: "#b91c1c", border: "1px solid #fca5a5", cursor: "pointer", fontFamily: "inherit",
+                            }}>{"\uD83D\uDDD1"} Delete forever</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -14130,7 +14313,22 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             } catch (_) { /* non-fatal */ }
             setEditingEntry(null);
           }}
-          onDelete={(id) => { deleteEntry(id); setEditingEntry(null); }}
+          onDelete={(id) => {
+            // Guard against accidental clicks — confirmation is required.
+            // Soft-delete means the row lands in Recently Deleted (Data tab)
+            // where it can be restored for 30 days.
+            const ent = entriesRef.current.find(e => e.id === id);
+            const label = ent?.registration || ent?.equipment || "this entry";
+            const dateLabel = ent?.date || "unknown date";
+            setConfirmAction({
+              message: `Delete the ${label} entry from ${dateLabel}?\n\nIt'll move to Recently Deleted (Data tab) where you can restore it for 30 days before it's purged for good.`,
+              onConfirm: async () => {
+                await deleteEntry(id);
+                setEditingEntry(null);
+                setConfirmAction(null);
+              },
+            });
+          }}
           onClose={() => setEditingEntry(null)}
           loadReceiptFn={loadReceiptImage}
         />
