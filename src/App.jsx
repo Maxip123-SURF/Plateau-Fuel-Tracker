@@ -412,6 +412,133 @@ function normalizeDriverName(name) {
   return DRIVER_NAME_ALIASES[key] || name.trim();
 }
 
+// ─── Driver Name Nickname / Typo Resolution ───────────────────────────────
+// Common English first-name short forms. Kept small and only bidirectional
+// pairs we're confident about — "Pete" could be short for Peter, but we
+// avoid entries like "Pat" that could point to Patrick OR Patricia without
+// context. Extend carefully as new drivers join.
+const DRIVER_FIRSTNAME_NICKNAMES = {
+  cam:         ["cameron"],          cameron:     ["cam"],
+  nick:        ["nicholas"],         nicholas:    ["nick"],
+  tim:         ["timothy"],          timothy:     ["tim"],
+  tom:         ["thomas"],           thomas:      ["tom"],
+  matt:        ["matthew", "mathew"], matthew:    ["matt", "mathew"],
+  mathew:      ["matt", "matthew"],
+  mike:        ["michael"],          michael:     ["mike"],
+  chris:       ["christopher"],      christopher: ["chris"],
+  rob:         ["robert", "bob"],    robert:      ["rob", "bob"],
+  bob:         ["robert", "rob"],
+  dan:         ["daniel"],           daniel:      ["dan"],
+  dave:        ["david"],            david:       ["dave"],
+  sam:         ["samuel"],           samuel:      ["sam"],
+  joe:         ["joseph"],           joseph:      ["joe"],
+  ant:         ["anthony"],          anthony:     ["ant", "tony"],
+  tony:        ["anthony"],
+  ben:         ["benjamin"],         benjamin:    ["ben"],
+  pete:        ["peter"],            peter:       ["pete"],
+  andy:        ["andrew"],           andrew:      ["andy"],
+  alex:        ["alexander"],        alexander:   ["alex"],
+  // Common spelling variants we've seen in live data
+  brendan:     ["brendon"],          brendon:     ["brendan"],
+};
+
+// Split a full name into { first, last }. Takes first token as first name
+// and everything else (joined) as last name so "Van Der Berg" stays intact.
+function splitDriverName(full) {
+  const parts = (full || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { first: "", last: "" };
+  if (parts.length === 1) return { first: parts[0], last: "" };
+  return { first: parts[0], last: parts.slice(1).join(" ") };
+}
+
+// True when two first names plausibly refer to the same person — identical,
+// a registered nickname, or one is a ≥3-char prefix of the other. Prefix
+// rule catches drivers where the dictionary would be overkill (e.g. a rare
+// nickname only used on one team) without matching too-short prefixes that
+// would collide across unrelated names.
+function firstNamesEquivalent(a, b) {
+  const x = (a || "").trim().toLowerCase();
+  const y = (b || "").trim().toLowerCase();
+  if (!x || !y) return false;
+  if (x === y) return true;
+  if ((DRIVER_FIRSTNAME_NICKNAMES[x] || []).includes(y)) return true;
+  if ((DRIVER_FIRSTNAME_NICKNAMES[y] || []).includes(x)) return true;
+  const shorter = x.length <= y.length ? x : y;
+  const longer  = x.length <= y.length ? y : x;
+  return shorter.length >= 3 && longer.startsWith(shorter);
+}
+
+// Resolve a typed driver name against a pool of known canonical names.
+// Returns { canonical, confidence, from, distance? }. Never rewrites the
+// name unless the match is strong — low-confidence typos are reported as
+// suggestions so the UI can flag them for admin review instead of silently
+// swapping the name.
+//
+//   exact    — identical after case/whitespace normalization
+//   alias    — matched DRIVER_NAME_ALIASES
+//   nickname — same last name + nickname-equivalent first name
+//   typo     — edit distance ≤ 2 on the full name, same first-AND-last
+//              initial (so "Joe Hirst" → "Joe Hurst" matches but "Joe
+//              Hurst" can't silently slide to "Dave Hall")
+//   none     — no plausible match, caller keeps the typed value
+function resolveDriverName(typed, knownNames) {
+  const clean = (typed || "").trim().replace(/\s+/g, " ");
+  if (!clean) return { canonical: typed, confidence: "none", from: typed };
+  const lower = clean.toLowerCase();
+
+  if (DRIVER_NAME_ALIASES[lower]) {
+    return { canonical: DRIVER_NAME_ALIASES[lower], confidence: "alias", from: clean };
+  }
+
+  const known = new Map(); // lowercaseFull -> { canonical, firstLower, lastLower }
+  for (const n of knownNames || []) {
+    if (!n) continue;
+    const norm = n.trim().replace(/\s+/g, " ");
+    if (!norm) continue;
+    const { first, last } = splitDriverName(norm);
+    known.set(norm.toLowerCase(), { canonical: norm, firstLower: first.toLowerCase(), lastLower: last.toLowerCase() });
+  }
+  if (known.size === 0) return { canonical: clean, confidence: "none", from: clean };
+
+  if (known.has(lower)) {
+    return { canonical: known.get(lower).canonical, confidence: "exact", from: clean };
+  }
+
+  const { first: tFirst, last: tLast } = splitDriverName(clean);
+  if (tLast) {
+    const tLastLower = tLast.toLowerCase();
+    for (const v of known.values()) {
+      if (!v.lastLower || v.lastLower !== tLastLower) continue;
+      const vFirst = v.canonical.split(/\s+/)[0];
+      if (firstNamesEquivalent(tFirst, vFirst)) {
+        return { canonical: v.canonical, confidence: "nickname", from: clean };
+      }
+    }
+  }
+
+  if (clean.length >= 5) {
+    const tFirstInit = (tFirst[0] || "").toLowerCase();
+    const tLastInit  = (tLast[0]  || "").toLowerCase();
+    let bestMatch = null, bestDist = Infinity;
+    for (const v of known.values()) {
+      const vFull = v.canonical;
+      if (Math.abs(vFull.length - clean.length) > 2) continue;
+      const vFirstInit = v.firstLower[0] || "";
+      const vLastInit  = v.lastLower[0]  || "";
+      if (tFirstInit && vFirstInit && tFirstInit !== vFirstInit) continue;
+      if (tLastInit && vLastInit && tLastInit !== vLastInit) continue;
+      const d = editDistance(lower, vFull.toLowerCase());
+      if (d > 2 || d === 0) continue;
+      if (d < bestDist) { bestDist = d; bestMatch = v.canonical; }
+    }
+    if (bestMatch) {
+      return { canonical: bestMatch, confidence: "typo", from: clean, distance: bestDist };
+    }
+  }
+
+  return { canonical: clean, confidence: "none", from: clean };
+}
+
 // Lookup fleet cards by driver name — fuzzy match, returns all cards for that person
 function lookupDriverCards(name) {
   if (!name || name.length < 2) return [];
@@ -2987,7 +3114,7 @@ function ManualEntryModal({ rego, division, vehicleType, onSave, onClose }) {
             onSave({
               id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
               submittedAt: new Date().toISOString(),
-              driverName: normalizeDriverName(f.driverName.trim()),
+              ...driverFieldsFor(f.driverName.trim()),
               registration: rego,
               division, vehicleType,
               odometer: parseFloat(f.odometer) || null,
@@ -3309,7 +3436,7 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
                   ...entry,
                   entryType: "other",
                   subType: isProduct ? "product" : "fuel",
-                  driverName: normalizeDriverName(f.driverName.trim()),
+                  ...driverFieldsFor(f.driverName.trim()),
                   date: f.date.trim(),
                   equipment: f.equipment.trim(),
                   linkedVehicle: f.linkedVehicle.trim().toUpperCase() || null,
@@ -3335,7 +3462,7 @@ function EditEntryModal({ entry, onSave, onDelete, onClose, loadReceiptFn }) {
                   ...entry,
                   entryType: null, // normal vehicle entry
                   subType: null,
-                  driverName: normalizeDriverName(f.driverName.trim()),
+                  ...driverFieldsFor(f.driverName.trim()),
                   registration: f.registration.trim().toUpperCase(),
                   date: f.date.trim(),
                   odometer: numOrNull(f.odometer),
@@ -3641,6 +3768,26 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
     flags.push({ category: "ai", type: "info", text: "Short name part", detail: `"${driverName}" — check first/last name is complete` });
   }
 
+  // Driver-name resolution flags — attached by canonicalizeDriverName at
+  // submission time. `nickname` / `alias` entries were auto-corrected on
+  // save (info-level acknowledgement), while `typo` matches are kept as
+  // typed and surface a warn-level suggestion for admin to either confirm
+  // or correct.
+  const dnRes = entry._driverNameResolution;
+  if (dnRes && dnRes.confidence) {
+    if (dnRes.confidence === "nickname" || dnRes.confidence === "alias") {
+      flags.push({
+        category: "ai", type: "info", text: "Driver name normalised",
+        detail: `Submitted as "${dnRes.from}" \u2192 saved as "${dnRes.canonical}" (${dnRes.confidence} match). Edit if this merged the wrong person.`,
+      });
+    } else if (dnRes.confidence === "typo") {
+      flags.push({
+        category: "ai", type: "warn", text: "Possible driver-name typo",
+        detail: `"${dnRes.from}" looks close to "${dnRes.canonical}" (${dnRes.distance}-letter difference). Open the entry to confirm or correct.`,
+      });
+    }
+  }
+
   // Unusually high litres
   if (litres > 300) {
     flags.push({ category: "ai", type: "warn", text: "Very high litres", detail: `${litres}L — verify this is correct` });
@@ -3742,6 +3889,56 @@ export default function App() {
   useEffect(() => { learnedCardMappingsRef.current = learnedCardMappings; }, [learnedCardMappings]);
   useEffect(() => { learnedCorrectionsRef.current = learnedCorrections; }, [learnedCorrections]);
   useEffect(() => { entriesRef.current = entries; }, [entries]);
+
+  // Gather the set of canonical driver names we'll match submissions
+  // against. We deliberately use ONLY the static DBs (fleet-card DB,
+  // rego master, aliases) — entry-derived names are skipped because
+  // they may themselves contain the typos we're trying to detect (e.g.
+  // a driver who's submitted "Joe Hirst" five times in a row shouldn't
+  // get their own mis-spelling promoted to "authoritative").
+  const getKnownDriverNames = () => {
+    const titleCase = (s) => (s || "").replace(/\b\w+/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase());
+    const out = new Set();
+    for (const v of Object.values(DRIVER_NAME_ALIASES)) out.add(v);
+    for (const c of DRIVER_CARDS) if (c.n) out.add(titleCase(c.n));
+    for (const v of REGO_DB) if (v.dr) out.add(titleCase(v.dr));
+    return [...out];
+  };
+
+  // Run a typed driver name through alias / nickname / typo resolution.
+  // Returns { name, resolution } where `name` is what to save on the entry:
+  //   · high-confidence matches (exact / alias / nickname) — swap to the
+  //     canonical form (the driver's legal name stays consistent)
+  //   · low-confidence typo matches — keep what the user typed but attach
+  //     a resolution object the admin can review via getEntryFlags
+  //   · no match — save as typed, no metadata
+  const canonicalizeDriverName = (typed) => {
+    if (!typed) return { name: typed, resolution: null };
+    const res = resolveDriverName(typed, getKnownDriverNames());
+    if (res.confidence === "exact" || res.confidence === "alias" || res.confidence === "nickname") {
+      return {
+        name: res.canonical,
+        // Only emit metadata when an actual rewrite happened — exact matches
+        // that just re-case the name don't need admin review.
+        resolution: res.canonical.trim() !== (typed || "").trim() ? res : null,
+      };
+    }
+    if (res.confidence === "typo") {
+      // Don't auto-rewrite — admin decides. Keep the typed name so the driver
+      // sees what they entered, but record the suggestion.
+      return { name: typed.trim(), resolution: res };
+    }
+    return { name: typed.trim(), resolution: null };
+  };
+
+  // Helper: spread into an entry object literal to set driverName +
+  // _driverNameResolution in one step. Lets the 6 entry-build sites share
+  // a single call without repeating the canonicalize logic.
+  const driverFieldsFor = (raw) => {
+    const r = canonicalizeDriverName(raw);
+    return { driverName: r.name, _driverNameResolution: r.resolution };
+  };
+
   const [storageReady, setStorageReady] = useState(false);
   const [toast, setToast] = useState(null);
   const [error, setError] = useState("");
@@ -5418,7 +5615,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
         entryType: "other",
         subType: isOil ? "product" : "fuel", // distinguish fuel vs product purchase
         division: otherForm.division || "Tree",
-        driverName: normalizeDriverName(`${form.driverFirstName.trim()} ${form.driverLastName.trim()}`.trim()),
+        ...driverFieldsFor(`${form.driverFirstName.trim()} ${form.driverLastName.trim()}`.trim()),
         equipment: otherForm.equipment.trim(),
         station: otherForm.station.trim() || station,
         fleetCardNumber: cardData?.cardNumber || cardNum || otherForm.fleetCard.trim() || "",
@@ -5503,7 +5700,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       return {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         submittedAt: now,
-        driverName: normalizeDriverName(`${form.driverFirstName.trim()} ${form.driverLastName.trim()}`.trim()),
+        ...driverFieldsFor(`${form.driverFirstName.trim()} ${form.driverLastName.trim()}`.trim()),
         registration: rego,
         division: division || getDivision(vehicleType),
         vehicleType,
@@ -5695,7 +5892,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
             submittedAt: now,
             entryType: "other",
             division: form.division || "Tree",
-            driverName: normalizeDriverName(`${form.driverFirstName.trim()} ${form.driverLastName.trim()}`.trim()),
+            ...driverFieldsFor(`${form.driverFirstName.trim()} ${form.driverLastName.trim()}`.trim()),
             equipment: equipDesc,
             station,
             fleetCardNumber: cardNum,
