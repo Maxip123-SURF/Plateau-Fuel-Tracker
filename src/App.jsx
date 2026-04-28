@@ -12901,7 +12901,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                           <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 22 }}></th>
                           <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 76 }}>Date</th>
                           <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 48 }}>Time</th>
-                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 64 }}>Rego</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 84 }}>Rego</th>
                           <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Station</th>
                           <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 78 }}>Product</th>
                           <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 58, textAlign: "right" }}>L</th>
@@ -12987,7 +12987,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                         <tr style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
                           <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 22 }}></th>
                           <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 76 }}>Date</th>
-                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 64 }} title="Rego as printed on the fleet card (authoritative for matching)">Rego</th>
+                          <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b", width: 84 }} title="Rego as printed on the fleet card (authoritative for matching)">Rego</th>
                           <th style={{ ...cellStyle, fontSize: 9, textTransform: "uppercase", fontWeight: 600, color: "#94a3b8", width: 54 }} title="Vehicle rego the driver actually drove (often matches, but can differ)">Vehicle</th>
                           <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Driver</th>
                           <th style={{ ...cellStyle, fontSize: 10, textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>Station</th>
