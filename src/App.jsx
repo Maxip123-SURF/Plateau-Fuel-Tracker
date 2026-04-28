@@ -539,6 +539,55 @@ function resolveDriverName(typed, knownNames) {
   return { canonical: clean, confidence: "none", from: clean };
 }
 
+// Build the canonical-name pool from the static DBs only. Deliberately
+// skips entry-derived names so a driver's own repeated typos (e.g. five
+// submissions of "Joe Hirst") can't promote themselves to authoritative.
+// Computed lazily — DRIVER_CARDS / REGO_DB don't change at runtime, so
+// callers can cache the result if hot.
+function getKnownDriverNames() {
+  const titleCase = (s) => (s || "").replace(/\b\w+/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase());
+  const out = new Set();
+  for (const v of Object.values(DRIVER_NAME_ALIASES)) out.add(v);
+  for (const c of DRIVER_CARDS) if (c.n) out.add(titleCase(c.n));
+  for (const v of REGO_DB) if (v.dr) out.add(titleCase(v.dr));
+  return [...out];
+}
+
+// Run a typed driver name through alias / nickname / typo resolution.
+// Returns { name, resolution }:
+//   · high-confidence (exact / alias / nickname) — `name` is the canonical
+//     form, `resolution` carries metadata only when the name actually
+//     changed (so admin can review the rewrite).
+//   · low-confidence typo — `name` stays as typed; `resolution` carries the
+//     suggestion so getEntryFlags can surface it for admin review.
+//   · no match — save as typed, no metadata.
+//
+// Module-scope on purpose — used by both top-level entry forms inside App
+// and by the standalone EditEntryModal / EditVehicleModal components, so
+// it can't depend on App's state. See git history for the bug where
+// keeping it App-scoped silently broke Save buttons inside the modals.
+function canonicalizeDriverName(typed) {
+  if (!typed) return { name: typed, resolution: null };
+  const res = resolveDriverName(typed, getKnownDriverNames());
+  if (res.confidence === "exact" || res.confidence === "alias" || res.confidence === "nickname") {
+    return {
+      name: res.canonical,
+      resolution: res.canonical.trim() !== (typed || "").trim() ? res : null,
+    };
+  }
+  if (res.confidence === "typo") {
+    return { name: typed.trim(), resolution: res };
+  }
+  return { name: typed.trim(), resolution: null };
+}
+
+// Spread into an entry object literal to set driverName +
+// _driverNameResolution in one step. Used at every entry-build site.
+function driverFieldsFor(raw) {
+  const r = canonicalizeDriverName(raw);
+  return { driverName: r.name, _driverNameResolution: r.resolution };
+}
+
 // Lookup fleet cards by driver name — fuzzy match, returns all cards for that person
 function lookupDriverCards(name) {
   if (!name || name.length < 2) return [];
@@ -3889,55 +3938,6 @@ export default function App() {
   useEffect(() => { learnedCardMappingsRef.current = learnedCardMappings; }, [learnedCardMappings]);
   useEffect(() => { learnedCorrectionsRef.current = learnedCorrections; }, [learnedCorrections]);
   useEffect(() => { entriesRef.current = entries; }, [entries]);
-
-  // Gather the set of canonical driver names we'll match submissions
-  // against. We deliberately use ONLY the static DBs (fleet-card DB,
-  // rego master, aliases) — entry-derived names are skipped because
-  // they may themselves contain the typos we're trying to detect (e.g.
-  // a driver who's submitted "Joe Hirst" five times in a row shouldn't
-  // get their own mis-spelling promoted to "authoritative").
-  const getKnownDriverNames = () => {
-    const titleCase = (s) => (s || "").replace(/\b\w+/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase());
-    const out = new Set();
-    for (const v of Object.values(DRIVER_NAME_ALIASES)) out.add(v);
-    for (const c of DRIVER_CARDS) if (c.n) out.add(titleCase(c.n));
-    for (const v of REGO_DB) if (v.dr) out.add(titleCase(v.dr));
-    return [...out];
-  };
-
-  // Run a typed driver name through alias / nickname / typo resolution.
-  // Returns { name, resolution } where `name` is what to save on the entry:
-  //   · high-confidence matches (exact / alias / nickname) — swap to the
-  //     canonical form (the driver's legal name stays consistent)
-  //   · low-confidence typo matches — keep what the user typed but attach
-  //     a resolution object the admin can review via getEntryFlags
-  //   · no match — save as typed, no metadata
-  const canonicalizeDriverName = (typed) => {
-    if (!typed) return { name: typed, resolution: null };
-    const res = resolveDriverName(typed, getKnownDriverNames());
-    if (res.confidence === "exact" || res.confidence === "alias" || res.confidence === "nickname") {
-      return {
-        name: res.canonical,
-        // Only emit metadata when an actual rewrite happened — exact matches
-        // that just re-case the name don't need admin review.
-        resolution: res.canonical.trim() !== (typed || "").trim() ? res : null,
-      };
-    }
-    if (res.confidence === "typo") {
-      // Don't auto-rewrite — admin decides. Keep the typed name so the driver
-      // sees what they entered, but record the suggestion.
-      return { name: typed.trim(), resolution: res };
-    }
-    return { name: typed.trim(), resolution: null };
-  };
-
-  // Helper: spread into an entry object literal to set driverName +
-  // _driverNameResolution in one step. Lets the 6 entry-build sites share
-  // a single call without repeating the canonicalize logic.
-  const driverFieldsFor = (raw) => {
-    const r = canonicalizeDriverName(raw);
-    return { driverName: r.name, _driverNameResolution: r.resolution };
-  };
 
   const [storageReady, setStorageReady] = useState(false);
   const [toast, setToast] = useState(null);
