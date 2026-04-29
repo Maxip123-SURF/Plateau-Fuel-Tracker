@@ -2325,7 +2325,39 @@ function fuzzyMatchFleetCard(scannedCard, scannedRego, learnedDB, learnedCardMap
   };
 }
 
-async function claudeScan(apiKey, b64, mime, prompt) {
+// ─── Claude vision model catalogue ─────────────────────────────────────────
+// Each scan task (orientation / receipt / card) picks one of these. Admin
+// can change the choice per task in Settings — orientation barely needs
+// any reasoning so Haiku is a great default; receipt scans hit the most
+// detail and benefit from Sonnet/Opus accuracy.
+//
+// To add a new model: drop another row here. The dropdown surfaces every
+// row; the "Custom" option in Settings lets admin enter any model id
+// without touching code.
+const CLAUDE_MODEL_OPTIONS = [
+  { id: "claude-haiku-4-5-20251001",  label: "Haiku 4.5",  tier: "fast",     note: "Cheapest, fastest. Plenty for orientation / simple OCR." },
+  { id: "claude-sonnet-4-20250514",   label: "Sonnet 4",   tier: "balanced", note: "Balanced cost vs accuracy." },
+  { id: "claude-sonnet-4-5-20250929", label: "Sonnet 4.5", tier: "balanced", note: "Newer Sonnet. Recommended default for receipts." },
+  { id: "claude-opus-4-20250514",     label: "Opus 4",     tier: "strong",   note: "Old default. Highest cost — only worth it on tough receipts." },
+  { id: "claude-opus-4-5-20250929",   label: "Opus 4.5",   tier: "strong",   note: "Newer Opus. Best accuracy on tricky receipts; very expensive." },
+];
+
+// Per-task defaults if the admin hasn't picked anything yet. The receipt
+// default switched from Opus 4 → Sonnet 4.5 here — a ~5x cost cut at
+// negligible accuracy impact on standard fuel receipts.
+const DEFAULT_API_MODELS = {
+  orientation: "claude-haiku-4-5-20251001",
+  receipt:     "claude-sonnet-4-5-20250929",
+  card:        "claude-sonnet-4-5-20250929",
+};
+
+const API_TASK_LABELS = {
+  orientation: { label: "Orientation check", desc: "Detects which way the receipt photo needs to rotate before OCR." },
+  receipt:     { label: "Receipt scan",      desc: "Reads date, litres, $/L, total, fuel type, line items, fleet-card detail." },
+  card:        { label: "Fleet-card scan",   desc: "Reads the 16-digit number and embossed rego off the physical card." },
+};
+
+async function claudeScan(apiKey, b64, mime, prompt, model) {
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -2335,7 +2367,9 @@ async function claudeScan(apiKey, b64, mime, prompt) {
       "anthropic-dangerous-direct-browser-access": "true",
     },
     body: JSON.stringify({
-      model: "claude-opus-4-20250514",
+      // Fall back to Opus 4 if no model is supplied — preserves the old
+      // pre-selector behaviour for any caller we missed.
+      model: model || "claude-opus-4-20250514",
       max_tokens: 2000,
       messages: [{
         role: "user",
@@ -4011,6 +4045,10 @@ export default function App() {
 
   const [apiKey, setApiKey] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
+  // Per-task model selection (orientation / receipt / card). Persisted
+  // via localStorage + Supabase setting "api_models" so all devices use
+  // the same models. Falls back to DEFAULT_API_MODELS if nothing saved.
+  const [apiModels, setApiModels] = useState(DEFAULT_API_MODELS);
   const [showKey, setShowKey] = useState(false);
   const [adminPasscode, setAdminPasscode] = useState("admin"); // default passcode
   const [passcodeInput, setPasscodeInput] = useState("");
@@ -4293,6 +4331,15 @@ export default function App() {
         if (kRes?.value) { setApiKey(kRes.value); setApiKeyInput(kRes.value); }
         if (lRes?.value) setLearnedDB(JSON.parse(lRes.value));
         if (pRes?.value) { setAdminPasscode(pRes.value); setPasscodeInput(pRes.value); }
+        // Per-task model selection — local cache reads first, cloud
+        // refresh below overrides if a more recent value exists.
+        try {
+          const mRes = await window.storage.get("fuel_api_models");
+          if (mRes?.value) {
+            const loaded = JSON.parse(mRes.value);
+            setApiModels({ ...DEFAULT_API_MODELS, ...loaded });
+          }
+        } catch (_) {}
         // Load trash bin (soft-deleted entries) + auto-purge anything older
         // than the retention window so the bin can't grow without bound.
         if (trRes?.value) {
@@ -4353,6 +4400,14 @@ export default function App() {
           if (cloudResolved) localResolved = cloudResolved;
           // Use shared API key from cloud if available (overrides local)
           if (cloudApiKey) { setApiKey(cloudApiKey); setApiKeyInput(cloudApiKey); }
+          // Per-task model selection from cloud (overrides local)
+          db.loadSetting("api_models").then(raw => {
+            if (!raw) return;
+            try {
+              setApiModels({ ...DEFAULT_API_MODELS, ...JSON.parse(raw) });
+              window.storage.set("fuel_api_models", raw).catch(() => {});
+            } catch (_) {}
+          }).catch(() => {});
           // Load fleet card transactions
           db.loadFleetCardTransactions().then(txns => { if (txns?.length) setFleetCardTxns(txns); }).catch(() => {});
           // Load learned card corrections from cloud + reconcile with static DB
@@ -4716,11 +4771,12 @@ export default function App() {
     lastRefreshAttemptRef.current = now;
     setIsSyncing(true);
     try {
-      const [cloudEntries, cloudService, cloudResolved, cloudApiKey] = await Promise.all([
+      const [cloudEntries, cloudService, cloudResolved, cloudApiKey, cloudApiModels] = await Promise.all([
         db.loadEntries().catch(() => null),
         db.loadServiceData().catch(() => null),
         db.loadResolvedFlags().catch(() => null),
         db.loadSetting("anthropic_api_key").catch(() => null),
+        db.loadSetting("api_models").catch(() => null),
       ]);
       if (cloudEntries) {
         // Run cloud entries through autofillCardFields so freshly pulled
@@ -4791,6 +4847,13 @@ export default function App() {
       if (cloudApiKey) {
         setApiKey(cloudApiKey);
         setApiKeyInput(cloudApiKey);
+      }
+      if (cloudApiModels) {
+        try {
+          const parsed = JSON.parse(cloudApiModels);
+          setApiModels({ ...DEFAULT_API_MODELS, ...parsed });
+          try { window.storage.set("fuel_api_models", cloudApiModels); } catch (_) {}
+        } catch (_) {}
       }
       // Fire-and-forget the settings-backed collections
       db.loadFleetCardTransactions().then(txns => { if (txns) setFleetCardTxns(txns); }).catch(() => {});
@@ -5563,7 +5626,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       // Step 2: Auto-detect orientation
       let rotation = 0;
       try {
-        const orientResult = await claudeScan(apiKey, b64, mime, ORIENTATION_PROMPT);
+        const orientResult = await claudeScan(apiKey, b64, mime, ORIENTATION_PROMPT, apiModels.orientation);
         if (scanIdRef.current !== currentScanId) return;
         if (orientResult?.rotation && [90, 180, 270].includes(orientResult.rotation)) {
           rotation = orientResult.rotation;
@@ -5581,7 +5644,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       // Step 3: Full receipt scan on properly oriented image
       setReceiptB64(b64);
       setReceiptMime(mime);
-      let result = await claudeScan(apiKey, b64, mime, buildReceiptScanPrompt());
+      let result = await claudeScan(apiKey, b64, mime, buildReceiptScanPrompt(), apiModels.receipt);
       if (scanIdRef.current !== currentScanId) return;
       let normalized = normalizeReceiptData(result, learnedCorrectionsRef.current);
 
@@ -5598,7 +5661,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
           try {
             const original = await compressImage(file, 0);
             if (scanIdRef.current !== currentScanId) return;
-            const retryResult = await claudeScan(apiKey, original.b64, original.mime, buildReceiptScanPrompt());
+            const retryResult = await claudeScan(apiKey, original.b64, original.mime, buildReceiptScanPrompt(), apiModels.receipt);
             if (scanIdRef.current !== currentScanId) return;
             const retryNormalized = normalizeReceiptData(retryResult, learnedCorrectionsRef.current);
             const retryQuality = [!!retryNormalized.date, !!retryNormalized.station, retryNormalized.litres > 0, (retryNormalized.totalCost > 0 || retryNormalized.fuelCost > 0)].filter(Boolean).length;
@@ -5656,7 +5719,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       setReceiptB64(b64);
       setReceiptMime(mime);
       setReceiptPreview(`data:${mime};base64,${b64}`);
-      const result = await claudeScan(apiKey, b64, mime, buildReceiptScanPrompt());
+      const result = await claudeScan(apiKey, b64, mime, buildReceiptScanPrompt(), apiModels.receipt);
       if (scanIdRef.current !== currentScanId) return;
       const normalized = normalizeReceiptData(result, learnedCorrectionsRef.current);
       setReceiptData(normalized);
@@ -5695,7 +5758,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     const currentScanId = ++scanIdRef.current;
     setReceiptScanning(true); setError("");
     try {
-      const result = await claudeScan(apiKey, receiptB64, receiptMime, buildReceiptScanPrompt());
+      const result = await claudeScan(apiKey, receiptB64, receiptMime, buildReceiptScanPrompt(), apiModels.receipt);
       if (scanIdRef.current !== currentScanId) return;
       const normalized = normalizeReceiptData(result, learnedCorrectionsRef.current);
       setReceiptData(normalized);
@@ -5739,7 +5802,7 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
       const { b64, mime } = await compressImage(file);
       if (cardScanIdRef.current !== currentScanId) return;
       setCardB64(b64);
-      const result = await claudeScan(apiKey, b64, mime, buildCardScanPrompt());
+      const result = await claudeScan(apiKey, b64, mime, buildCardScanPrompt(), apiModels.card);
       if (cardScanIdRef.current !== currentScanId) return;
       if (result?.cardNumber || result?.vehicleOnCard) {
         // Run the matcher so the card-only flow benefits from the same
@@ -7282,7 +7345,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     setReceiptScanning(true); setError("");
     try {
       const { b64, mime } = await compressImage(file);
-      const result = await claudeScan(apiKey, b64, mime, buildCardScanPrompt());
+      const result = await claudeScan(apiKey, b64, mime, buildCardScanPrompt(), apiModels.card);
       if (result?.cardNumber || result?.vehicleOnCard) {
         const matched = fuzzyMatchFleetCard(result.cardNumber, result.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
         setCardData(buildCardDataFromMatch(matched, result));
@@ -13988,6 +14051,101 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         <div style={{ fontSize: 11, color: "#94a3b8" }}>Shared across all devices via cloud {"\u00B7"} only sent to Anthropic for scanning {"\u00B7"} get a key at console.anthropic.com</div>
         {apiKey && <div style={{ fontSize: 12, color: "#15803d", marginTop: 6, fontWeight: 500 }}>{"\u2713"} API key is set</div>}
       </div>
+
+      {/* \u2500\u2500 Model selector per task \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+          Different scan tasks have very different cost/accuracy needs.
+          Orientation just needs "is this rotated?" \u2014 Haiku handles it
+          for ~25x less than Opus. Receipt scanning is the heavy one;
+          admin can leave it on Sonnet 4.5 for normal use and bump up
+          to Opus only if a particular fleet's receipts get mis-read. */}
+      {(() => {
+        const persistApiModels = async (next) => {
+          setApiModels(next);
+          const json = JSON.stringify(next);
+          try { await window.storage.set("fuel_api_models", json); } catch (_) {}
+          try { await db.saveSetting("api_models", json); } catch (_) {}
+        };
+        const setOne = (task, modelId) => {
+          persistApiModels({ ...apiModels, [task]: modelId });
+        };
+        const tasks = ["orientation", "receipt", "card"];
+        return (
+          <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", letterSpacing: "0.04em", textTransform: "uppercase" }}>Models per task</div>
+              <button
+                onClick={() => persistApiModels({ ...DEFAULT_API_MODELS })}
+                title="Reset all three tasks to the recommended defaults"
+                style={{ padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 500, background: "#f8fafc", color: "#64748b", border: "1px solid #e2e8f0", cursor: "pointer", fontFamily: "inherit" }}
+              >Reset to defaults</button>
+            </div>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
+              Pick which Claude vision model handles each scan. Cheap models on simple tasks (orientation), stronger models on harder ones (receipts) is the typical setup.
+            </div>
+            {tasks.map(task => {
+              const meta = API_TASK_LABELS[task];
+              const current = apiModels[task] || DEFAULT_API_MODELS[task];
+              const isCustom = !CLAUDE_MODEL_OPTIONS.find(m => m.id === current);
+              const currentMeta = CLAUDE_MODEL_OPTIONS.find(m => m.id === current);
+              return (
+                <div key={task} style={{ marginBottom: 14, padding: "10px 12px", background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0" }}>
+                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{meta.label}</div>
+                    <div style={{ fontSize: 11, color: "#94a3b8" }}>{currentMeta ? currentMeta.tier : "custom"}</div>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>{meta.desc}</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {CLAUDE_MODEL_OPTIONS.map(opt => {
+                      const sel = opt.id === current;
+                      const tierBg = opt.tier === "fast" ? "#f0fdf4" : opt.tier === "balanced" ? "#eff6ff" : "#fef3c7";
+                      const tierBorder = opt.tier === "fast" ? "#86efac" : opt.tier === "balanced" ? "#93c5fd" : "#fcd34d";
+                      const tierText = opt.tier === "fast" ? "#15803d" : opt.tier === "balanced" ? "#1e40af" : "#92400e";
+                      return (
+                        <button
+                          key={opt.id}
+                          onClick={() => setOne(task, opt.id)}
+                          title={opt.note}
+                          style={{
+                            padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                            background: sel ? tierBg : "white",
+                            color: sel ? tierText : "#64748b",
+                            border: `1.5px solid ${sel ? tierBorder : "#e2e8f0"}`,
+                            cursor: "pointer", fontFamily: "inherit",
+                          }}
+                        >{opt.label}</button>
+                      );
+                    })}
+                    <button
+                      onClick={() => {
+                        const custom = window.prompt(
+                          `Custom model id for "${meta.label}"\n\nEnter any Anthropic model id (e.g. claude-opus-4-7-20251015). Leave blank to keep current.`,
+                          isCustom ? current : ""
+                        );
+                        if (custom && custom.trim()) setOne(task, custom.trim());
+                      }}
+                      title="Type any model id by hand \u2014 useful for new releases not in the dropdown yet."
+                      style={{
+                        padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                        background: isCustom ? "#fef3c7" : "white",
+                        color: isCustom ? "#92400e" : "#94a3b8",
+                        border: `1.5px solid ${isCustom ? "#fcd34d" : "#e2e8f0"}`,
+                        cursor: "pointer", fontFamily: "inherit",
+                      }}
+                    >{isCustom ? `Custom: ${current.replace(/^claude-/, "")}` : "Custom\u2026"}</button>
+                  </div>
+                  {currentMeta && (
+                    <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 6, fontStyle: "italic" }}>{currentMeta.note}</div>
+                  )}
+                </div>
+              );
+            })}
+            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
+              Changes save instantly and sync to all devices. Each receipt submission usually fires orientation + receipt (so 2 calls); a low-confidence scan can trigger a 3rd retry on the receipt model.
+            </div>
+          </div>
+        );
+      })()}
+
       <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, marginBottom: 16 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>Data</div>
         <div style={{ fontSize: 13, color: "#64748b", marginBottom: 12 }}>{entries.length} entries {"\u00B7"} {Object.keys(serviceData).length} service records {"\u00B7"} {Object.keys(learnedDB).length} learned vehicles {"\u00B7"} {Object.keys(resolvedFlags).length} resolved issues</div>
