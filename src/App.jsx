@@ -6279,6 +6279,49 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     showToast(`Updated card ...${newKey.slice(-6)}`);
   };
 
+  // Soft-delete a driver: rename every entry assigned to them to
+  // "*DELETED_(Name)*" but keep the historical fuel data intact. The
+  // driver disappears from the Drivers tab and the active drivers list,
+  // but their litres / cost still roll up to the dashboard totals (under
+  // the ghost name) so historical reports stay accurate. The merged
+  // *DELETED_* prefix is intentionally ugly so it sticks out if it ever
+  // shows up somewhere unexpected.
+  const deleteDriver = (driver) => {
+    if (!driver || !driver.entries) return;
+    const safeName = (driver.name || "Unknown").trim();
+    const newName = `*DELETED_${safeName}*`;
+    const count = driver.entries.length;
+    setConfirmAction({
+      message: `Delete driver "${safeName}"?\n\nTheir ${count} entr${count === 1 ? "y" : "ies"} will stay in the system but the driver name will be replaced with "${newName}" so historical totals stay intact. The driver will disappear from the Drivers tab.\n\nThis cannot be undone in bulk — you'd have to fix each entry individually.`,
+      onConfirm: async () => {
+        const driverEntryIds = new Set(driver.entries.map(e => e.id).filter(Boolean));
+        if (driverEntryIds.size === 0) { setConfirmAction(null); return; }
+        const modified = [];
+        const updated = entriesRef.current.map(e => {
+          if (!driverEntryIds.has(e.id)) return e;
+          const next = { ...e, driverName: newName, _driverNameResolution: null };
+          modified.push(next);
+          return next;
+        });
+        // Local + storage update for instant UI feedback
+        entriesRef.current = updated;
+        setEntries(updated);
+        try { await window.storage.set("fuel_entries", JSON.stringify(updated)); } catch (_) {}
+        // Cloud-save each rewritten entry. Mark as pending so the post-
+        // confirm refresh can't replay stale cloud data and undo the rename.
+        for (const e of modified) {
+          pendingEntrySavesRef.current.add(e.id);
+          db.saveEntry(e).catch(() => {}).finally(() => {
+            pendingEntrySavesRef.current.delete(e.id);
+          });
+        }
+        setConfirmAction(null);
+        setExpandedDriver(null);
+        showToast(`Driver "${safeName}" deleted · ${modified.length} entr${modified.length === 1 ? "y" : "ies"} renamed`);
+      },
+    });
+  };
+
   const deleteVehicle = (rego) => {
     setConfirmAction({
       message: `Delete ALL entries for ${rego}? This cannot be undone.`,
@@ -11704,13 +11747,24 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
 
           return (
             <div key={driver.name} style={{ marginBottom: 8 }}>
-              {/* Driver header */}
-              <button onClick={() => setExpandedDriver(isExpanded ? null : driver.name.toLowerCase())} style={{
-                width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
-                padding: "12px 14px", borderRadius: 10, border: "1px solid #e2e8f0",
-                background: isExpanded ? "#f0fdf4" : "white", cursor: "pointer", fontFamily: "inherit",
-                transition: "all 0.15s",
+              {/* Driver header — split into a clickable expand region (left)
+                  and an admin-only delete button (right). Wrapping the whole
+                  row in a single <button> previously made it impossible to
+                  nest a delete button without HTML validity errors. */}
+              <div style={{
+                width: "100%", display: "flex", alignItems: "stretch",
+                borderRadius: 10, border: "1px solid #e2e8f0",
+                background: isExpanded ? "#f0fdf4" : "white",
+                transition: "all 0.15s", overflow: "hidden",
               }}>
+                <button
+                  onClick={() => setExpandedDriver(isExpanded ? null : driver.name.toLowerCase())}
+                  style={{
+                    flex: 1, display: "flex", alignItems: "center", justifyContent: "space-between",
+                    padding: "12px 14px", border: "none", background: "transparent",
+                    cursor: "pointer", fontFamily: "inherit", textAlign: "left",
+                  }}
+                >
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <div style={{
                     width: 36, height: 36, borderRadius: "50%", background: "#16a34a", color: "white",
@@ -11732,7 +11786,23 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                     Last: {lastE?.date || "—"}
                   </div>
                 </div>
-              </button>
+                </button>
+                {isAdmin && (
+                  <button
+                    onClick={(ev) => { ev.stopPropagation(); deleteDriver(driver); }}
+                    title={`Delete driver "${driver.name}" · entries kept under *DELETED_${driver.name}*`}
+                    style={{
+                      padding: "0 14px", border: "none",
+                      borderLeft: "1px solid #e2e8f0",
+                      background: "transparent", color: "#cbd5e1",
+                      cursor: "pointer", fontSize: 16, fontFamily: "inherit",
+                      transition: "all 0.15s",
+                    }}
+                    onMouseEnter={ev => { ev.currentTarget.style.background = "#fef2f2"; ev.currentTarget.style.color = "#dc2626"; }}
+                    onMouseLeave={ev => { ev.currentTarget.style.background = "transparent"; ev.currentTarget.style.color = "#cbd5e1"; }}
+                  >{"🗑"}</button>
+                )}
+              </div>
 
               {/* Expanded driver details */}
               {isExpanded && (
