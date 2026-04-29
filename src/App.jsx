@@ -74,6 +74,16 @@ const db = {
         _cardOriginalRego: meta._cardOriginalRego || null,
         _cardRawRead: meta._cardRawRead || null,
         _cardAiIssues: meta._cardAiIssues || null,
+        // Auto-reconcile bookkeeping — present only on entries synthesised
+        // by the FleetCard CSV import (AUTO_RECONCILE_DRIVERS path). Lets
+        // the Data tab spot which rows were never lodged manually.
+        _autoCreated: meta._autoCreated || false,
+        _autoCreatedFrom: meta._autoCreatedFrom || null,
+        _autoCreatedFromTxn: meta._autoCreatedFromTxn || null,
+        _autoCreatedAt: meta._autoCreatedAt || null,
+        // Driver-name resolution (alias / nickname / typo) suggestion —
+        // attached at submission time, surfaced as an admin flag.
+        _driverNameResolution: meta._driverNameResolution || null,
         receiptUrl: meta.receiptUrl || null,
         linkedVehicle: meta.linkedVehicle || null,
       };
@@ -123,6 +133,11 @@ const db = {
         _cardOriginalRego: entry._cardOriginalRego || null,
         _cardRawRead: entry._cardRawRead || null,
         _cardAiIssues: entry._cardAiIssues || null,
+        _autoCreated: entry._autoCreated || false,
+        _autoCreatedFrom: entry._autoCreatedFrom || null,
+        _autoCreatedFromTxn: entry._autoCreatedFromTxn || null,
+        _autoCreatedAt: entry._autoCreatedAt || null,
+        _driverNameResolution: entry._driverNameResolution || null,
         receiptUrl: entry.receiptUrl || null,
         linkedVehicle: entry.linkedVehicle || null,
       },
@@ -664,6 +679,41 @@ function autofillCardFields(entry) {
   // hasRego && !hasCard
   const card = lookupCardNumberByRego(entry.cardRego);
   return card ? { ...entry, fleetCardNumber: card } : entry;
+}
+
+// ─── Auto-Reconcile Drivers ───────────────────────────────────────────────
+// Specific managers / drivers who don't lodge receipts via the app but
+// always drive the same vehicle on the same fleet card. When a FleetCard
+// CSV import lands a transaction matching one of these (by card number
+// OR rego), we synthesise a matching app entry from the txn data so the
+// reconciliation auto-pairs them. The driver doesn't need to install the
+// app, but their fuel still shows up in the dashboard / per-driver
+// reports automatically.
+//
+// Add new drivers here ONLY when the rego ↔ card ↔ driver triplet is
+// stable (one card → one vehicle → one person) — anything fuzzier
+// belongs in the regular review flow instead, otherwise we risk
+// silently mis-attributing fuel.
+const AUTO_RECONCILE_DRIVERS = [
+  { rego: "FHX25L", card: "7034305111220834", driver: "Tony Plummer",   division: "Tree", vehicleType: "Ute", fuelType: "Diesel" },
+  { rego: "XP21GC", card: "7034305117554921", driver: "Dan Vandermeel", division: "Tree", vehicleType: "EWP", fuelType: "Diesel" },
+  { rego: "CM77KG", card: "7034305116027192", driver: "Billy Price",    division: "Tree", vehicleType: "EWP", fuelType: "Diesel" },
+];
+// Match a txn against the auto-reconcile list. Card number wins (more
+// specific); rego fallback handles the case where the CSV rego column
+// is populated but the card column is missing/garbled.
+function findAutoReconcileDriver(cardNumber, rego) {
+  const cleanCard = (cardNumber || "").replace(/[\s\[\]]/g, "");
+  const cleanRego = (rego || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (cleanCard) {
+    const byCard = AUTO_RECONCILE_DRIVERS.find(d => d.card === cleanCard);
+    if (byCard) return byCard;
+  }
+  if (cleanRego) {
+    const byRego = AUTO_RECONCILE_DRIVERS.find(d => d.rego === cleanRego);
+    if (byRego) return byRego;
+  }
+  return null;
 }
 
 // Traffic control vehicles are ALWAYS Landscape division
@@ -12220,7 +12270,93 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         }
         setFleetCardTxns(existing);
         await db.saveFleetCardTransactions(existing);
-        showToast(`Imported ${added} new transaction${added !== 1 ? "s" : ""} (${newTxns.length - added} duplicates skipped)`);
+
+        // ── Auto-reconcile shortcut for managers who never lodge receipts ──
+        // For each newly-imported txn whose card / rego matches an entry in
+        // AUTO_RECONCILE_DRIVERS, synthesise a matching app entry so the
+        // reconciliation pairs them automatically. Only runs on FRESH txns
+        // (added=true, dup=false) so re-importing the same CSV doesn't
+        // double-create. Also skipped for surcharges and for txns that
+        // already have a real app entry (driver lodged a receipt manually).
+        const autoEntries = [];
+        const now = new Date().toISOString();
+        const newTxnIds = new Set();
+        for (const t of newTxns) {
+          if (t.isSurcharge) continue;
+          // Only act on the txns we actually added (the dup check above
+          // skipped re-imports). Re-derive added-ness by id since `added`
+          // is just a count.
+          if (!existing.find(ex => ex.id === t.id)) continue;
+          if (newTxnIds.has(t.id)) continue;
+          newTxnIds.add(t.id);
+          const auto = findAutoReconcileDriver(t.cardNumber, t.rego);
+          if (!auto) continue;
+          // Skip if there's already an app entry that the matcher would
+          // pair with this txn (rego + same date + cost within tolerance).
+          // Avoids over-writing a real receipt the driver did happen to
+          // lodge, or stomping on entries created on a previous import.
+          const txnDate = parseDate(t.date);
+          const tolerance = Math.max(2, Math.abs(t.cost || 0) * 0.05);
+          const alreadyCovered = entriesRef.current.some(e => {
+            if (parseDate(e.date) !== txnDate) return false;
+            const eCard = (e.fleetCardNumber || "").replace(/[\s\[\]]/g, "");
+            const eRego = (e.cardRego || e.registration || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+            const cardMatch = eCard && eCard === auto.card;
+            const regoMatch = eRego && eRego === auto.rego;
+            if (!cardMatch && !regoMatch) return false;
+            // Cost-aware: if the existing entry's totalCost is within
+            // tolerance of the txn cost, treat it as "already covered".
+            // If the existing entry has no cost, also consider it a
+            // match — assume the admin will fix that one up manually.
+            if (e.totalCost == null) return true;
+            return Math.abs((e.totalCost || 0) - (t.cost || 0)) <= tolerance;
+          });
+          if (alreadyCovered) continue;
+          autoEntries.push({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            submittedAt: now,
+            driverName: auto.driver,
+            registration: auto.rego,
+            division: auto.division,
+            vehicleType: auto.vehicleType,
+            date: t.date,
+            litres: t.litres,
+            pricePerLitre: t.ppl,
+            totalCost: t.cost,
+            station: t.station,
+            fuelType: auto.fuelType,
+            fleetCardNumber: auto.card,
+            cardRego: auto.rego,
+            fleetCardVehicle: auto.rego,
+            fleetCardDriver: auto.driver,
+            odometer: t.odometer || null,
+            hasReceipt: false,
+            // Tracing fields so admin can spot auto-created entries on the
+            // Data tab and tell which CSV import produced them.
+            _autoCreated: true,
+            _autoCreatedFrom: "fleetcard_csv",
+            _autoCreatedFromTxn: t.id,
+            _autoCreatedAt: now,
+          });
+        }
+        if (autoEntries.length > 0) {
+          const merged = [...entriesRef.current, ...autoEntries];
+          await persist(merged);
+          // persist() only cloud-saves a single changedEntry, so loop the
+          // rest manually with the same pending-saves protection used
+          // elsewhere — otherwise a refresh between persist and cloud
+          // sync would wipe the new rows.
+          for (const e of autoEntries) {
+            pendingEntrySavesRef.current.add(e.id);
+            db.saveEntry(e).catch(() => {}).finally(() => {
+              pendingEntrySavesRef.current.delete(e.id);
+            });
+          }
+        }
+        const autoMsg = autoEntries.length > 0
+          ? ` · auto-created ${autoEntries.length} app entr${autoEntries.length === 1 ? "y" : "ies"} for ${[...new Set(autoEntries.map(e => e.driverName))].join(", ")}`
+          : "";
+        showToast(`Imported ${added} new transaction${added !== 1 ? "s" : ""} (${newTxns.length - added} duplicates skipped)${autoMsg}`);
       } catch (err) {
         showToast("Failed to parse file: " + err.message, "warn");
       }
