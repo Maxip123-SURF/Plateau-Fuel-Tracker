@@ -937,18 +937,32 @@ SECTION A — HEADER (top of receipt):
 The petrol station name, address and business info is at the very top. Note the station name.
 
 SECTION B — DATE & TRANSACTION INFO:
-Usually a line showing the date and transaction/receipt number. The date follows Australian Day/Month/Year format:
-- "13/03/26" means 13th March 2026
-- "13/3/26" means 13th March 2026
-- "13/03/2026" means 13th March 2026
-- "5/4/26" means 5th April 2026
-Always output the date as DD/MM/YYYY with full 4-digit year.
+Usually a line showing the date and transaction/receipt number.
+
+⚠️ DATES ARE ALWAYS AUSTRALIAN DAY-FIRST FORMAT — DD/MM/YY OR DD/MM/YYYY. ⚠️
+This app serves an Australian fleet. Every receipt is printed at an Australian petrol station, where dates ALWAYS go DAY first, MONTH second, YEAR last.
+
+NEVER interpret slash-separated dates as:
+  ✗ YY/MM/DD (year-first, ISO-style) — WRONG. "22/03/26" is NOT 26 March 2022.
+  ✗ MM/DD/YYYY (US month-first) — WRONG. "04/10/26" is NOT 10 April 2026.
+
+ALWAYS interpret slash-separated dates as DD/MM/YY:
+  ✓ "22/03/26" = 22nd March 2026 (twenty-second of March twenty-twenty-six)
+  ✓ "13/03/26" = 13th March 2026
+  ✓ "5/4/26" = 5th April 2026
+  ✓ "13/03/2026" = 13th March 2026
+  ✓ "04/10/26" = 4th October 2026
+
+Even when the first two digits look like they COULD plausibly be a year (e.g. "22" or "23"), they are still the DAY in Australian format. Output dates as DD/MM/YYYY with a 4-digit year — for 2-digit years assume the current century (e.g. "26" → "2026").
 
 CRITICAL DATE RULE: The date on a receipt can NEVER be in the future. Receipts record past transactions. Today's date (Sydney AEST/AEDT) is ${sydneyTodayAU()}. If you read a date that appears to be after today, you have almost certainly misread the day, month, or year. Common misreads:
 - Swapping day and month (e.g. reading "04/10" as 10th April when it's actually 4th October)
 - Wrong year (e.g. reading "25" instead of "26" or vice versa)
 - Misreading a digit (e.g. "1" as "7", "5" as "6")
-Double-check: does the date make sense as a PAST date? If not, re-read the digits carefully.
+
+FRESHNESS HINT: Fuel receipts are usually within the last few weeks. A receipt dated more than ~12 months ago is suspicious and probably a misread (almost certainly you flipped DD/MM/YY into YY/MM/DD). If your interpretation gives a date older than 12 months, RE-READ assuming Australian DD/MM/YY before committing to the answer.
+
+Do NOT raise YY/MM/DD as an alternative reading or "issue" — it is never a valid interpretation in this context. If you see a date and the AU DD/MM/YY reading lands in the past 12 months, that IS the answer; report high confidence.
 
 SECTION C — FUEL ENTRIES (the most critical section):
 This section contains fuel purchase information in a roughly columnar format. Each fuel entry is spread across 1 or 2 lines. The columns are typically:
@@ -1080,7 +1094,7 @@ STEP 4: OUTPUT FORMAT
 
 Return ONLY valid JSON with no other text:
 {
-  "date": "DD/MM/YYYY — Australian format. If receipt shows 16/03/26 return 16/03/2026.",
+  "date": "DD/MM/YYYY — Australian DAY-FIRST format ALWAYS. '22/03/26' = 22 March 2026 (NEVER 26 March 2022). Never use YY/MM/DD or MM/DD/YYYY interpretations.",
   "station": "station name or null",
   "fuelType": "primary fuel type or null",
   "pricePerLitre": number_in_DOLLARS_per_litre_or_null,
