@@ -14341,8 +14341,15 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           counts[dn] = (counts[dn] || 0) + 1;
         }
         const uniqueNames = Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-        const fromCount = mergeFrom ? (counts[mergeFrom] || 0) : 0;
-        const previewClean = mergeFrom && mergeTo && mergeFrom.trim().toLowerCase() !== mergeTo.trim().toLowerCase();
+        // Case-insensitive count lookup — admin might type "joe hirst"
+        // when entries store "Joe Hirst", and we still want to show the
+        // accurate preview count.
+        const fromTrim = (mergeFrom || "").trim();
+        const fromLower = fromTrim.toLowerCase();
+        const fromCount = fromLower
+          ? Object.entries(counts).reduce((s, [n, c]) => n.toLowerCase() === fromLower ? s + c : s, 0)
+          : 0;
+        const previewClean = fromTrim && mergeTo.trim() && fromLower !== mergeTo.trim().toLowerCase();
         return (
           <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, marginBottom: 16 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 4 }}>Merge driver names</div>
@@ -14352,16 +14359,19 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 8, alignItems: "end", marginBottom: 10 }}>
               <div>
                 <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 4 }}>Merge name</label>
-                <select
+                <input
+                  type="text"
                   value={mergeFrom}
                   onChange={e => setMergeFrom(e.target.value)}
-                  style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 13, fontFamily: "inherit", color: "#0f172a", background: "white", outline: "none" }}
-                >
-                  <option value="">{"— pick a name to merge —"}</option>
+                  placeholder="Type or pick a name to merge"
+                  list="merge-from-suggestions"
+                  style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 13, fontFamily: "inherit", color: "#0f172a", outline: "none", boxSizing: "border-box" }}
+                />
+                <datalist id="merge-from-suggestions">
                   {uniqueNames.map(([n, c]) => (
-                    <option key={n} value={n}>{n} ({c} {c === 1 ? "entry" : "entries"})</option>
+                    <option key={n} value={n}>{c} {c === 1 ? "entry" : "entries"}</option>
                   ))}
-                </select>
+                </datalist>
               </div>
               <div style={{ fontSize: 18, color: "#94a3b8", fontWeight: 700, paddingBottom: 9 }}>{"→"}</div>
               <div>
@@ -14381,7 +14391,11 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             </div>
             {previewClean && (
               <div style={{ background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#1e40af", marginBottom: 10 }}>
-                Preview: <strong>{fromCount}</strong> existing entr{fromCount === 1 ? "y" : "ies"} will be renamed from <strong>"{mergeFrom}"</strong> to <strong>"{mergeTo.trim()}"</strong>. Future submissions of "{mergeFrom}" will also auto-resolve.
+                {fromCount > 0 ? (
+                  <>Preview: <strong>{fromCount}</strong> existing entr{fromCount === 1 ? "y" : "ies"} will be renamed from <strong>"{fromTrim}"</strong> to <strong>"{mergeTo.trim()}"</strong>. Future submissions of "{fromTrim}" will also auto-resolve.</>
+                ) : (
+                  <>No existing entries match <strong>"{fromTrim}"</strong> yet — alias <strong>"{fromTrim}"</strong> {"→"} <strong>"{mergeTo.trim()}"</strong> will still be saved so any future submission of "{fromTrim}" auto-resolves to "{mergeTo.trim()}".</>
+                )}
               </div>
             )}
             <div style={{ display: "flex", gap: 8 }}>
