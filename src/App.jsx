@@ -421,6 +421,26 @@ const DRIVER_CARDS = [
 {n:"KYLE OSBORNE",c:"7034305113700650",r:"AP85DF"},{n:"JASON SORBARA",c:"7034305108940667",r:"AT13VE"},{n:"NAISH",c:"7034305107330928",r:"BF51KJ"},{n:"JUSTIN LEWIS",c:"7034305116558659",r:"BJ57HC"},{n:"NICK JONES",c:"7034305117074284",r:"BR22ZZ"},{n:"YARRAN/JASON HUGHES",c:"7034305116939826",r:"BT08QM"},{n:"BRENDAN RICHARDSON",c:"7034305110165261",r:"BY38KR"},{n:"LUKE BARTLEY",c:"7034305117926277",r:"CA10BL"},{n:"BILLY PRICE",c:"7034305113893588",r:"CC24TI"},{n:"GAB FITZGERALD",c:"7034305111758833",r:"CC94JL"},{n:"JOE HUTTON",c:"7034305117597540",r:"CD36PH"},{n:"SAM THOMAS",c:"7034305117902278",r:"CH90KL"},{n:"DANIEL THOMSON",c:"7034305108274448",r:"CH95ZD"},{n:"KYLE OSBORNE",c:"7034305109332146",r:"CI98BZ"},{n:"KEV CARRILLO",c:"7034305108260140",r:"CJ55FB"},{n:"DAN THOMPSON",c:"7034305107310136",r:"CL52NS"},{n:"BILLY PRICE",c:"7034305116027192",r:"CM77KG"},{n:"CHRIS PLAYER",c:"7034305117020659",r:"CN47HS"},{n:"SHAUN COLE",c:"7034305113746059",r:"CP60AF"},{n:"DENNIS KOCJANCIC",c:"7034305116296961",r:"CP06YZ"},{n:"SHANE DEMIRAL",c:"7034305112151236",r:"CT74KE"},{n:"SAXON",c:"7034305106890443",r:"CV14NO"},{n:"LAURA HARDWOOD",c:"7034305114887118",r:"CX22BE"},{n:"WATER TRUCK / MICK THOMAS",c:"7034305118302718",r:"CX23BE"},{n:"JAYDEN STRONG",c:"7034305112823891",r:"DB78SC"},{n:"KYLE OSBORNE",c:"7034305117002350",r:"DF25LB"},{n:"JACOB DEVEIGNE",c:"7034305110028204",r:"DF26LB"},{n:"ALEX GLYNN",c:"7034305112341555",r:"DI05QD"},{n:"BLOWER TRUCK",c:"7034305112809668",r:"CS63LP"},{n:"JACOB DEVEIGNE",c:"7034305117003408",r:"DP60DA"},{n:"BRETT SONTER",c:"7034305108863984",r:"DPL85C"},{n:"TIM PRICE",c:"7034305117463065",r:"DP90CQ"},{n:"JASON HUGHES",c:"7034305112129919",r:"DSU65Y"},{n:"SONYA",c:"7034305114570151",r:"EAE28V"},{n:"SAM LAW",c:"7034305118360872",r:"EBL30C"},{n:"AMELIA PLUMMER",c:"7034305115642942",r:"ECE83U"},{n:"LEE DAVIS",c:"7034305107318832",r:"EES53B"},{n:"JOE PELLIZZON",c:"7034305117257665",r:"EYO62W"},{n:"JOHN LARGEY",c:"7034305111069538",r:"EOL97X"},{n:"MARTIN HOWARD",c:"7034305113441354",r:"EQE85L"},{n:"BJ",c:"7034305110325493",r:"EQP77D"},{n:"JOE HURST",c:"7034305112846991",r:"EQP77E"},{n:"RHYS DWYER",c:"7034305109386829",r:"ERQ21S"},{n:"ANT YOUNGMAN",c:"7034305117050979",r:"EVA47B"},{n:"DECLAN KANE",c:"7034305107192484",r:"EYN61Z"},{n:"DAYNE COOMBE",c:"7034305107009274",r:"EYO02K"},{n:"CASS CHAPPLE",c:"7034305107286914",r:"EYP02J"},{n:"DANE PLUMMER",c:"7034305116249275",r:"FGP29X"},{n:"TONY PLUMMER",c:"7034305111220834",r:"FHX25L"},{n:"JOE DALEY",c:"7034305116246156",r:"FMT17H"},{n:"JASON JOHNSON",c:"7034305113817595",r:"JCJ010"},{n:"CAM WILLIAMS",c:"7034305117354637",r:"MISC3"},{n:"CARLOS CARRILLO",c:"7034305115254565",r:"WIA53F"},{n:"WADE HANNELL",c:"7034305116506179",r:"WNU522"},{n:"BRENDON DEACON / OLD BOGIE",c:"7034305117074201",r:"XN56BU"},{n:"NATHAN MORALES",c:"7034305110311667",r:"XN59QZ"},{n:"SCOTT WOOD",c:"7034305110006994",r:"XN95CF"},{n:"ALEX GLYNN",c:"7034305116398783",r:"XO05MA"},{n:"MATTHEW BROCK",c:"7034305108678176",r:"XO05RX"},{n:"MATT ROGERS",c:"7034305111375786",r:"XO08FN"},{n:"MAROS MENCAK",c:"7034305111698906",r:"XO20NL"},{n:"TIM PRICE",c:"7034305113655797",r:"XO49LN"},{n:"SHAUN DENNISON",c:"7034305110811948",r:"XO96XP"},{n:"STEVE NEWTON",c:"7034305111299762",r:"XP058N"},{n:"DOUG GRANT",c:"7034305116197722",r:"XP31AG"},{n:"JASON HUGHES",c:"7034305116247253",r:"XP41MC"},{n:"JASON SORBARA",c:"7034305118477429",r:"XP86LM"},{n:"ROGER BORG",c:"7034305118263860",r:"YMN14E"},{n:"MATHEW BROCK",c:"7034305108678176",r:"XO05RX"},{n:"NICK JONES",c:"7034305118134137",r:"TA55AA"},{n:"CAM WILLIAMS",c:"7034305118134749",r:"TA80QZ"},{n:"MAROS MENCAK",c:"7034305118133972",r:"TC70VA"},{n:"JASON HUGHES",c:"7034305118175825",r:"TC80LA"},{n:"SPARE",c:"7034305118133980",r:"TL48UF"},{n:"DENNIS KOCJANCIC",c:"7034305118145893",r:"TL56PO"},{n:"DOUG GRANT",c:"7034305118148491",r:"TM84AT"},{n:"SPARE",c:"7034305118133311",r:"TP97AL"},{n:"STEVE NEWTON",c:"7034305118133477",r:"TP99AL"},{n:"MATT ROGERS",c:"7034305118177383",r:"YN05HA"},{n:"SCOTT WOOD",c:"7034305118178019",r:"YN71AN"}
 ];
 
+// ─── Deleted-driver naming convention ──────────────────────────────────────
+// When admin removes a driver from the Drivers tab, every entry that driver
+// owned has its `driverName` rewritten to `*DELETED_<originalName>*` —
+// the entries themselves stay in the database (so historical totals remain
+// accurate) but the Drivers tab hides them from the active list and routes
+// them into the "Deleted drivers archive" collapsible section. The wrapping
+// asterisks make the marker stand out if it ever leaks into a place we
+// didn't expect (and prevents real names from collisions).
+const DELETED_DRIVER_PREFIX = "*DELETED_";
+const DELETED_DRIVER_SUFFIX = "*";
+const isDeletedDriverName = (name) =>
+  typeof name === "string" &&
+  name.startsWith(DELETED_DRIVER_PREFIX) &&
+  name.endsWith(DELETED_DRIVER_SUFFIX) &&
+  name.length > DELETED_DRIVER_PREFIX.length + DELETED_DRIVER_SUFFIX.length;
+const originalDriverName = (deletedName) =>
+  isDeletedDriverName(deletedName)
+    ? deletedName.slice(DELETED_DRIVER_PREFIX.length, -DELETED_DRIVER_SUFFIX.length)
+    : deletedName;
+
 // ─── Driver Name Aliases ───────────────────────────────────────────────────
 // Maps known name variants to a single canonical form so the same person
 // doesn't appear as two different drivers on the Drivers tab or in reports.
@@ -4161,6 +4181,9 @@ export default function App() {
   const [dataSearch, setDataSearch] = useState("");
   const [driverSearch, setDriverSearch] = useState("");
   const [expandedDriver, setExpandedDriver] = useState(null);
+  // Drivers tab — collapsible "Deleted drivers archive" at the bottom of
+  // the Drivers list. Closed by default so the active list stays uncluttered.
+  const [deletedDriversExpanded, setDeletedDriversExpanded] = useState(false);
   const [cardMonth, setCardMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; });
   const [cardSearch, setCardSearch] = useState("");
   const [editingCard, setEditingCard] = useState(null); // { oldCard, newCard, newDrivers, newRegos } for inline card header editing
@@ -6556,19 +6579,20 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
   };
 
   // Soft-delete a driver: rename every entry assigned to them to
-  // "*DELETED_(Name)*" but keep the historical fuel data intact. The
-  // driver disappears from the Drivers tab and the active drivers list,
-  // but their litres / cost still roll up to the dashboard totals (under
-  // the ghost name) so historical reports stay accurate. The merged
-  // *DELETED_* prefix is intentionally ugly so it sticks out if it ever
-  // shows up somewhere unexpected.
+  // "*DELETED_(Name)*" but keep the historical fuel data intact. The driver
+  // disappears from the active Drivers tab list and shows up in the
+  // "Deleted drivers archive" collapsible at the bottom — admin can
+  // Restore from there to bring them back. Their litres / cost still roll
+  // up to the dashboard totals (under the ghost name) so historical reports
+  // stay accurate. The merged *DELETED_* prefix is intentionally ugly so it
+  // sticks out if it ever shows up somewhere unexpected.
   const deleteDriver = (driver) => {
     if (!driver || !driver.entries) return;
     const safeName = (driver.name || "Unknown").trim();
-    const newName = `*DELETED_${safeName}*`;
+    const newName = `${DELETED_DRIVER_PREFIX}${safeName}${DELETED_DRIVER_SUFFIX}`;
     const count = driver.entries.length;
     setConfirmAction({
-      message: `Delete driver "${safeName}"?\n\nTheir ${count} entr${count === 1 ? "y" : "ies"} will stay in the system but the driver name will be replaced with "${newName}" so historical totals stay intact. The driver will disappear from the Drivers tab.\n\nThis cannot be undone in bulk — you'd have to fix each entry individually.`,
+      message: `Delete driver "${safeName}"?\n\nTheir ${count} entr${count === 1 ? "y" : "ies"} will stay in the system but the driver name will be marked as deleted so historical totals stay intact. They'll move from the active Drivers list into the "Deleted drivers archive" at the bottom of the Drivers tab — you can restore them from there if needed.`,
       onConfirm: async () => {
         const driverEntryIds = new Set(driver.entries.map(e => e.id).filter(Boolean));
         if (driverEntryIds.size === 0) { setConfirmAction(null); return; }
@@ -6593,7 +6617,44 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
         }
         setConfirmAction(null);
         setExpandedDriver(null);
-        showToast(`Driver "${safeName}" deleted · ${modified.length} entr${modified.length === 1 ? "y" : "ies"} renamed`);
+        showToast(`Driver "${safeName}" archived · ${modified.length} entr${modified.length === 1 ? "y" : "ies"} preserved`);
+      },
+    });
+  };
+
+  // Restore a previously-deleted driver: strip the *DELETED_…* wrapper from
+  // every matching entry and re-save. Inverse of `deleteDriver`. Useful when
+  // an admin deleted the wrong driver, or when a name returns to active
+  // duty. Only restores entries that match the EXACT *DELETED_<name>*
+  // string we're restoring — won't accidentally pull in a different
+  // deleted driver with a similar name.
+  const restoreDriver = (deletedDriver) => {
+    if (!deletedDriver || !deletedDriver.entries) return;
+    const original = originalDriverName(deletedDriver.name);
+    const count = deletedDriver.entries.length;
+    setConfirmAction({
+      message: `Restore "${original}"?\n\nTheir ${count} entr${count === 1 ? "y" : "ies"} will move back to the active Drivers list under the original name "${original}".`,
+      onConfirm: async () => {
+        const driverEntryIds = new Set(deletedDriver.entries.map(e => e.id).filter(Boolean));
+        if (driverEntryIds.size === 0) { setConfirmAction(null); return; }
+        const modified = [];
+        const updated = entriesRef.current.map(e => {
+          if (!driverEntryIds.has(e.id)) return e;
+          const next = { ...e, driverName: original };
+          modified.push(next);
+          return next;
+        });
+        entriesRef.current = updated;
+        setEntries(updated);
+        try { await window.storage.set("fuel_entries", JSON.stringify(updated)); } catch (_) {}
+        for (const e of modified) {
+          pendingEntrySavesRef.current.add(e.id);
+          db.saveEntry(e).catch(() => {}).finally(() => {
+            pendingEntrySavesRef.current.delete(e.id);
+          });
+        }
+        setConfirmAction(null);
+        showToast(`Driver "${original}" restored · ${modified.length} entr${modified.length === 1 ? "y" : "ies"}`);
       },
     });
   };
@@ -11963,9 +12024,14 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     }
 
     // Sort by name
-    let driverList = Object.values(driverMap).sort((a, b) => a.name.localeCompare(b.name));
+    const allDrivers = Object.values(driverMap).sort((a, b) => a.name.localeCompare(b.name));
+    // Partition into active (shown in main list, summary stats, activity)
+    // and deleted (routed to the collapsible archive at the bottom).
+    let driverList = allDrivers.filter(d => !isDeletedDriverName(d.name));
+    const deletedDriverList = allDrivers.filter(d => isDeletedDriverName(d.name));
 
-    // Filter by search
+    // Filter by search — active list only. The archive has its own list and
+    // is small enough not to need search filtering.
     if (driverSearch.trim()) {
       const q = driverSearch.trim().toLowerCase();
       driverList = driverList.filter(d =>
@@ -11990,10 +12056,13 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         {(() => {
           const now = new Date();
           const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate() - 7);
-          // Use merged driver list to avoid duplicates
-          const allDriverNames = Object.values(driverMap).map(d => d.name).sort();
+          // Skip deleted drivers — the activity card is about who's
+          // currently working, not who's been archived. Deleted drivers
+          // get their own collapsible section below the list.
+          const activeDriverObjs = Object.values(driverMap).filter(d => !isDeletedDriverName(d.name));
+          const allDriverNames = activeDriverObjs.map(d => d.name).sort();
           const activeDrivers = new Set();
-          Object.values(driverMap).forEach(d => {
+          activeDriverObjs.forEach(d => {
             d.entries.forEach(e => {
               if (!e.date) return;
               const dt = parseDate(e.date);
@@ -12002,7 +12071,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           });
           const inactiveDrivers = allDriverNames.filter(d => !activeDrivers.has(d));
           const driverLastEntry = {};
-          Object.values(driverMap).forEach(drv => {
+          activeDriverObjs.forEach(drv => {
             if (!drv.lastEntry) return;
             const ts = parseDate(drv.lastEntry.date);
             if (!ts) return;
@@ -12245,6 +12314,92 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             </div>
           );
         })}
+
+        {/* ── Deleted drivers archive ─────────────────────────────────────
+            Collapsible section listing every driver that's been removed
+            from the active list. Their entries stay in the database
+            (so historical totals don't change) but they don't clutter
+            the main Drivers tab. Admin-only Restore button per row
+            puts a driver back in the active list. */}
+        {deletedDriverList.length > 0 && (() => {
+          const totalArchivedEntries = deletedDriverList.reduce((s, d) => s + d.entries.length, 0);
+          const totalArchivedSpend = deletedDriverList.reduce((s, d) => s + d.totalCost, 0);
+          return (
+            <div style={{ marginTop: 24, background: "white", border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden" }}>
+              <button
+                onClick={() => setDeletedDriversExpanded(!deletedDriversExpanded)}
+                style={{
+                  width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "12px 14px", background: deletedDriversExpanded ? "#f8fafc" : "transparent",
+                  border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left",
+                  borderBottom: deletedDriversExpanded ? "1px solid #f1f5f9" : "none",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 18 }}>{"🗄"}{"️"}</span>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#475569" }}>Deleted drivers archive</div>
+                    <div style={{ fontSize: 11, color: "#94a3b8" }}>
+                      {deletedDriverList.length} driver{deletedDriverList.length !== 1 ? "s" : ""} {"·"} {totalArchivedEntries} entr{totalArchivedEntries !== 1 ? "ies" : "y"} preserved {"·"} ${totalArchivedSpend.toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 500, color: "#94a3b8" }}>
+                  {deletedDriversExpanded ? "Collapse ▲" : "Expand ▼"}
+                </span>
+              </button>
+              {deletedDriversExpanded && (
+                <div style={{ padding: "10px 14px 14px", background: "#f8fafc" }}>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.5 }}>
+                    These drivers were removed from the active Drivers list. Their fuel entries are kept in the database — historical dashboard totals stay accurate — but the drivers no longer show up alongside the active team. Restore brings a driver back to the active list under their original name.
+                  </div>
+                  {deletedDriverList.map(d => {
+                    const original = originalDriverName(d.name);
+                    const lastEDate = d.lastEntry?.date || "—";
+                    return (
+                      <div key={d.name} style={{
+                        display: "flex", alignItems: "center", justifyContent: "space-between",
+                        padding: "10px 12px", marginBottom: 6, background: "white",
+                        borderRadius: 8, border: "1px solid #e2e8f0",
+                      }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: 1 }}>
+                          <div style={{
+                            width: 32, height: 32, borderRadius: "50%", background: "#cbd5e1", color: "white",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            fontSize: 12, fontWeight: 700, flexShrink: 0,
+                          }}>
+                            {original.split(" ").map(n => n[0] || "").join("").toUpperCase().slice(0, 2)}
+                          </div>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: "#475569" }}>
+                              {original}
+                              <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 400, marginLeft: 8, fontStyle: "italic" }}>archived</span>
+                            </div>
+                            <div style={{ fontSize: 11, color: "#94a3b8" }}>
+                              {d.entries.length} entr{d.entries.length !== 1 ? "ies" : "y"} {"·"} ${d.totalCost.toFixed(2)} {"·"} {[...d.vehicles].length} vehicle{d.vehicles.size !== 1 ? "s" : ""} {"·"} last: {lastEDate}
+                            </div>
+                          </div>
+                        </div>
+                        {isAdmin && (
+                          <button
+                            onClick={() => restoreDriver(d)}
+                            title={`Restore "${original}" to the active Drivers list`}
+                            style={{
+                              padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                              background: "#f0fdf4", color: "#15803d",
+                              border: "1px solid #86efac", cursor: "pointer", fontFamily: "inherit",
+                              flexShrink: 0,
+                            }}
+                          >Restore</button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
     );
   };
