@@ -366,25 +366,32 @@ const SERVICE_WARNING_KM = 2000; // Warn at 8000km (10000 - 2000)
 const SERVICE_WARNING_HRS = 50;  // Warn at 450hrs (500 - 50)
 
 // Vehicle types that track hours instead of km
-const HOURS_BASED_TYPES = new Set(["Excavator", "Stump Grinder", "Mower", "Landscape Tractor"]);
+const HOURS_BASED_TYPES = new Set(["Excavator", "Stump Grinder", "Mower", "Landscape Tractor", "Chipper"]);
 const isHoursBased = (vehicleType) => HOURS_BASED_TYPES.has(vehicleType);
 const odoUnit = (vehicleType) => isHoursBased(vehicleType) ? "hrs" : "km";
 const serviceInterval = (vehicleType) => isHoursBased(vehicleType) ? SERVICE_INTERVAL_HRS : SERVICE_INTERVAL_KM;
 const serviceWarning = (vehicleType) => isHoursBased(vehicleType) ? SERVICE_WARNING_HRS : SERVICE_WARNING_KM;
 
-// Typical fuel efficiency ranges — L/km for road vehicles, L/hr for hours-based equipment
-const EFFICIENCY_RANGES = {
-  Ute: { low: 0.06, high: 0.18, unit: "L/km" },
-  Truck: { low: 0.10, high: 0.45, unit: "L/km" },
-  Excavator: { low: 4, high: 25, unit: "L/hr" },
-  EWP: { low: 0.05, high: 0.30, unit: "L/km" },
-  Chipper: { low: 0.04, high: 0.30, unit: "L/km" },
-  "Stump Grinder": { low: 3, high: 15, unit: "L/hr" },
-  Trailer: { low: 0.06, high: 0.20, unit: "L/km" },
-  "Hired Vehicle": { low: 0.04, high: 0.30, unit: "L/km" },
-  Mower: { low: 2, high: 12, unit: "L/hr" },
-  "Landscape Tractor": { low: 4, high: 20, unit: "L/hr" },
-  Other: { low: 0.04, high: 0.40, unit: "L/km" },
+// Typical fuel efficiency ranges — L/km for road vehicles, L/hr for hours-based equipment.
+// `high` values were raised 4x in May 2026 (from the original mid-2024 set) because the
+// previous thresholds were tuned for "normal driving" and flagged practically every loaded
+// tree-care fill-up as anomalous. The current values only fire on egregious outliers —
+// genuinely suspect fills (wrong vehicle / siphoning / leaks). Admin can override per-type
+// in Settings → "Fuel efficiency flag thresholds"; that override is persisted to Supabase
+// and synced across devices. This constant is the factory default used when no override
+// has been saved.
+const DEFAULT_EFFICIENCY_RANGES = {
+  Ute: { low: 0.06, high: 0.72, unit: "L/km" },
+  Truck: { low: 0.10, high: 1.80, unit: "L/km" },
+  Excavator: { low: 4, high: 100, unit: "L/hr" },
+  EWP: { low: 0.05, high: 1.20, unit: "L/km" },
+  Chipper: { low: 3, high: 60, unit: "L/hr" },
+  "Stump Grinder": { low: 3, high: 60, unit: "L/hr" },
+  Trailer: { low: 0.06, high: 0.80, unit: "L/km" },
+  "Hired Vehicle": { low: 0.04, high: 1.20, unit: "L/km" },
+  Mower: { low: 2, high: 48, unit: "L/hr" },
+  "Landscape Tractor": { low: 4, high: 80, unit: "L/hr" },
+  Other: { low: 0.04, high: 1.60, unit: "L/km" },
 };
 
 // Helper to get division for a vehicle type
@@ -3874,7 +3881,11 @@ function ServiceModal({ rego, current, onSave, onClose, vehicleType: vtProp }) {
 }
 
 // ─── Flag logic ─────────────────────────────────────────────────────────────
-function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
+// `ranges` is the per-vehicle-type efficiency-threshold map, pulled from
+// component state (admin-tunable in Settings). Falls back to the factory
+// defaults when no override exists or this is called from a code path that
+// hasn't been wired up yet — keeps the function safe to call out of context.
+function getEntryFlags(entry, prevEntry, vehicleType, svcData, ranges = DEFAULT_EFFICIENCY_RANGES) {
   const flags = [];
   const odo = entry.odometer;
   const prevOdo = prevEntry?.odometer;
@@ -4001,7 +4012,7 @@ function getEntryFlags(entry, prevEntry, vehicleType, svcData) {
 
   if (kmTravelled > 0 && litres > 0) {
     const efficiency = litres / kmTravelled; // L/km or L/hr depending on type
-    const range = EFFICIENCY_RANGES[vehicleType] || EFFICIENCY_RANGES.Other;
+    const range = ranges[vehicleType] || ranges.Other || DEFAULT_EFFICIENCY_RANGES.Other;
     const effUnit = hrsMode ? "L/hr" : "L/km";
     const decimals = hrsMode ? 1 : 3;
     if (efficiency > range.high) {
@@ -4093,6 +4104,16 @@ export default function App() {
   // via localStorage + Supabase setting "api_models" so all devices use
   // the same models. Falls back to DEFAULT_API_MODELS if nothing saved.
   const [apiModels, setApiModels] = useState(DEFAULT_API_MODELS);
+  // Per-vehicle-type fuel-efficiency thresholds for the "High fuel usage" /
+  // "Low fuel usage" flags. Admin-tunable in Settings. Persisted via
+  // localStorage + Supabase setting "efficiency_thresholds" so all devices
+  // see the same values. Falls back to DEFAULT_EFFICIENCY_RANGES if no
+  // override saved. Stored as a partial map (only customised types are
+  // saved); merged with defaults on read so adding a new vehicle type to
+  // DEFAULT_EFFICIENCY_RANGES later doesn't require migrating saved data.
+  const [efficiencyThresholds, setEfficiencyThresholds] = useState(DEFAULT_EFFICIENCY_RANGES);
+  const efficiencyThresholdsRef = useRef(efficiencyThresholds);
+  useEffect(() => { efficiencyThresholdsRef.current = efficiencyThresholds; }, [efficiencyThresholds]);
   // Admin-curated "merge driver names" map — persisted via localStorage +
   // Supabase setting "learned_driver_aliases". Keys are lower-case source
   // spellings, values are the canonical display name. Synced into the
@@ -4395,6 +4416,19 @@ export default function App() {
             setApiModels({ ...DEFAULT_API_MODELS, ...loaded });
           }
         } catch (_) {}
+        // Per-vehicle-type efficiency thresholds — local cache reads first,
+        // cloud refresh below overrides if a more recent value exists.
+        // Stored as a partial map (only customised types); merged with
+        // DEFAULT_EFFICIENCY_RANGES so newly-added types default sensibly.
+        try {
+          const tRes = await window.storage.get("fuel_efficiency_thresholds");
+          if (tRes?.value) {
+            const loaded = JSON.parse(tRes.value);
+            if (loaded && typeof loaded === "object") {
+              setEfficiencyThresholds({ ...DEFAULT_EFFICIENCY_RANGES, ...loaded });
+            }
+          }
+        } catch (_) {}
         // Admin-curated driver name merges — load local cache first; cloud
         // refresh path syncs from Supabase for cross-device alignment.
         try {
@@ -4473,6 +4507,17 @@ export default function App() {
             try {
               setApiModels({ ...DEFAULT_API_MODELS, ...JSON.parse(raw) });
               window.storage.set("fuel_api_models", raw).catch(() => {});
+            } catch (_) {}
+          }).catch(() => {});
+          // Efficiency thresholds from cloud (overrides local)
+          db.loadSetting("efficiency_thresholds").then(raw => {
+            if (!raw) return;
+            try {
+              const loaded = JSON.parse(raw);
+              if (loaded && typeof loaded === "object") {
+                setEfficiencyThresholds({ ...DEFAULT_EFFICIENCY_RANGES, ...loaded });
+                window.storage.set("fuel_efficiency_thresholds", raw).catch(() => {});
+              }
             } catch (_) {}
           }).catch(() => {});
           // Admin-curated driver name merges from cloud — overrides local.
@@ -9544,7 +9589,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                       // Collect flags
                       const vehicleFlags = [];
                       sorted.forEach((e, i) => {
-                        const flags = getEntryFlags(e, i > 0 ? sorted[i - 1] : null, vt, serviceData[rego]);
+                        const flags = getEntryFlags(e, i > 0 ? sorted[i - 1] : null, vt, serviceData[rego], efficiencyThresholds);
                         flags.forEach(f => {
                           // Must set `date` (not just `entryDate`) so flagId matches
                           // the IDs produced by the modal/KPI count — otherwise the
@@ -9825,10 +9870,10 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                                         const lPerKm = (kmTravelled > 0 && litres > 0) ? litres / kmTravelled : null;
                                         const calcCost = (litres > 0 && ppl > 0) ? litres * ppl : null;
                                         const variance = (totalCost != null && calcCost != null) ? totalCost - calcCost : null;
-                                        const flags = getEntryFlags(e, prev, vt, serviceData[rego]);
+                                        const flags = getEntryFlags(e, prev, vt, serviceData[rego], efficiencyThresholds);
                                         const hasFlag = flags.some(f => f.type === "danger" || f.type === "warn");
                                         const showSvc = i === sorted.length - 1;
-                                        const effRange = EFFICIENCY_RANGES[vt] || EFFICIENCY_RANGES.Other;
+                                        const effRange = efficiencyThresholds[vt] || efficiencyThresholds.Other || DEFAULT_EFFICIENCY_RANGES.Other;
 
                                         return (
                                           <tr key={e.id} style={{ background: hasFlag ? "#fffbf0" : "white" }}>
@@ -10184,7 +10229,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
       const flags = [];
       regoEntries.forEach((e, i) => {
         const prev = i > 0 ? regoEntries[i - 1] : null;
-        getEntryFlags(e, prev, vt, serviceData[rego]).forEach(f => flags.push({ ...f, rego, date: e.date, odo: e.odometer, _entryId: e.id, _entry: e }));
+        getEntryFlags(e, prev, vt, serviceData[rego], efficiencyThresholds).forEach(f => flags.push({ ...f, rego, date: e.date, odo: e.odometer, _entryId: e.id, _entry: e }));
       });
 
       // Fuel cost totals
@@ -10202,7 +10247,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     });
 
     return vehicles;
-  }, [entries, serviceData]);
+  }, [entries, serviceData, efficiencyThresholds]);
 
   // ── Dashboard view ────────────────────────────────────────────────────────
   const renderDashboard = () => {
@@ -10844,7 +10889,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
               Review their entry history to identify causes.
             </div>
             {worsening.map(v => {
-              const effRange = EFFICIENCY_RANGES[v.vt] || EFFICIENCY_RANGES.Other;
+              const effRange = efficiencyThresholds[v.vt] || efficiencyThresholds.Other || DEFAULT_EFFICIENCY_RANGES.Other;
               const hb = isHoursBased(v.vt);
               const unit = hb ? "L/hr" : "L/km";
               const recent3 = v.efficiencies.slice(-3);
@@ -11108,7 +11153,7 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
                         <tbody>
                           {group.vehicles.map(v => {
                             const sc = svcColor(v.svcStatus);
-                            const effRange = EFFICIENCY_RANGES[v.vt] || EFFICIENCY_RANGES.Other;
+                            const effRange = efficiencyThresholds[v.vt] || efficiencyThresholds.Other || DEFAULT_EFFICIENCY_RANGES.Other;
                             const isRowExpanded = expandedFleetVehicle === v.rego;
                             const vehicleEntries = entries
                               .filter(e => e.entryType !== "other" && e.registration === v.rego)
@@ -14321,6 +14366,140 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             })}
             <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
               Changes save instantly and sync to all devices. Each receipt submission usually fires orientation + receipt (so 2 calls); a low-confidence scan can trigger a 3rd retry on the receipt model.
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Fuel-usage flag thresholds ─────────────────────────────────
+          The "High fuel usage" / "Low fuel usage" flags compare each
+          fill-up's L/100km (road) or L/hr (hours-based) against a
+          per-vehicle-type ceiling and floor. Defaults are tuned for
+          tree-care work — heavy loads, stop-start traffic, full days
+          of equipment running — so they only fire on egregious outliers.
+          Admin can tune per type here if a particular fleet pattern
+          calls for tighter or looser bounds. Saved to Supabase so all
+          devices see the same values. */}
+      {(() => {
+        const persistThresholds = async (next) => {
+          setEfficiencyThresholds(next);
+          // Only persist the customised types to keep the saved blob
+          // small and let the defaults silently track future changes
+          // to DEFAULT_EFFICIENCY_RANGES.
+          const partial = {};
+          for (const [vt, r] of Object.entries(next)) {
+            const def = DEFAULT_EFFICIENCY_RANGES[vt];
+            if (!def || r.low !== def.low || r.high !== def.high) partial[vt] = r;
+          }
+          const json = JSON.stringify(partial);
+          try { await window.storage.set("fuel_efficiency_thresholds", json); } catch (_) {}
+          try { await db.saveSetting("efficiency_thresholds", json); } catch (_) {}
+        };
+        const setOne = (vt, key, displayValue) => {
+          const def = DEFAULT_EFFICIENCY_RANGES[vt] || DEFAULT_EFFICIENCY_RANGES.Other;
+          const isHrs = def.unit === "L/hr";
+          // Road vehicles are stored as L/km internally but displayed as
+          // L/100km in the UI. Convert back on save: L/100km / 100 = L/km.
+          const stored = isHrs ? Number(displayValue) : Number(displayValue) / 100;
+          if (!Number.isFinite(stored) || stored <= 0) return;
+          const current = efficiencyThresholds[vt] || def;
+          persistThresholds({ ...efficiencyThresholds, [vt]: { ...current, [key]: stored } });
+        };
+        const resetOne = (vt) => {
+          const def = DEFAULT_EFFICIENCY_RANGES[vt];
+          if (!def) return;
+          persistThresholds({ ...efficiencyThresholds, [vt]: { ...def } });
+        };
+        const resetAll = () => persistThresholds({ ...DEFAULT_EFFICIENCY_RANGES });
+        // Display-format helpers: road = L/100km (familiar to AU fleet
+        // managers); hours-based = L/hr.
+        const fmt = (val, isHrs) => isHrs
+          ? Number(val).toFixed(val < 10 ? 1 : 0)
+          : Number(val * 100).toFixed(val * 100 < 10 ? 1 : 0);
+        const types = Object.keys(DEFAULT_EFFICIENCY_RANGES);
+        const anyCustom = types.some(vt => {
+          const cur = efficiencyThresholds[vt];
+          const def = DEFAULT_EFFICIENCY_RANGES[vt];
+          return cur && def && (cur.low !== def.low || cur.high !== def.high);
+        });
+        return (
+          <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", letterSpacing: "0.04em", textTransform: "uppercase" }}>Fuel-usage flag thresholds</div>
+              <button
+                onClick={resetAll}
+                disabled={!anyCustom}
+                title="Reset every vehicle type back to the factory defaults"
+                style={{
+                  padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 500,
+                  background: anyCustom ? "#f8fafc" : "#f1f5f9",
+                  color: anyCustom ? "#64748b" : "#cbd5e1",
+                  border: "1px solid #e2e8f0", cursor: anyCustom ? "pointer" : "default", fontFamily: "inherit",
+                }}
+              >Reset all to defaults</button>
+            </div>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
+              An entry flags as <b>High fuel usage</b> when it exceeds the high value, or <b>Low fuel usage</b> when it falls below the low. Defaults catch only egregious outliers. Tighten if you want to surface more entries; loosen if you're getting noise.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1.4fr) minmax(80px, 1fr) minmax(80px, 1fr) auto", gap: 8, alignItems: "center", fontSize: 11, color: "#94a3b8", marginBottom: 6, paddingBottom: 6, borderBottom: "1px solid #f1f5f9" }}>
+              <div style={{ fontWeight: 600 }}>Vehicle type</div>
+              <div style={{ fontWeight: 600 }}>Low</div>
+              <div style={{ fontWeight: 600 }}>High</div>
+              <div></div>
+            </div>
+            {types.map(vt => {
+              const def = DEFAULT_EFFICIENCY_RANGES[vt];
+              const cur = efficiencyThresholds[vt] || def;
+              const isHrs = def.unit === "L/hr";
+              const unitLabel = isHrs ? "L/hr" : "L/100km";
+              const isCustom = cur.low !== def.low || cur.high !== def.high;
+              return (
+                <div key={vt} style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1.4fr) minmax(80px, 1fr) minmax(80px, 1fr) auto", gap: 8, alignItems: "center", padding: "6px 0" }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: "#0f172a" }}>
+                    {vt}
+                    <span style={{ fontSize: 10, color: "#94a3b8", marginLeft: 6, fontWeight: 400 }}>{unitLabel}</span>
+                  </div>
+                  <input
+                    type="number"
+                    step={isHrs ? "0.5" : "1"}
+                    min="0"
+                    defaultValue={fmt(cur.low, isHrs)}
+                    onBlur={e => {
+                      const v = e.target.value;
+                      if (v === "" || Number(v) === Number(fmt(cur.low, isHrs))) return;
+                      setOne(vt, "low", v);
+                    }}
+                    style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6, padding: "5px 8px", fontSize: 12, fontFamily: "inherit", color: "#0f172a", outline: "none", width: "100%" }}
+                  />
+                  <input
+                    type="number"
+                    step={isHrs ? "0.5" : "1"}
+                    min="0"
+                    defaultValue={fmt(cur.high, isHrs)}
+                    onBlur={e => {
+                      const v = e.target.value;
+                      if (v === "" || Number(v) === Number(fmt(cur.high, isHrs))) return;
+                      setOne(vt, "high", v);
+                    }}
+                    style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6, padding: "5px 8px", fontSize: 12, fontFamily: "inherit", color: isCustom ? "#1e40af" : "#0f172a", outline: "none", width: "100%", fontWeight: isCustom ? 600 : 400 }}
+                  />
+                  <button
+                    onClick={() => resetOne(vt)}
+                    disabled={!isCustom}
+                    title={isCustom ? `Reset ${vt} to defaults (low ${fmt(def.low, isHrs)} / high ${fmt(def.high, isHrs)} ${unitLabel})` : "Already at default"}
+                    style={{
+                      padding: "4px 8px", borderRadius: 6, fontSize: 10, fontWeight: 500,
+                      background: "transparent",
+                      color: isCustom ? "#64748b" : "#cbd5e1",
+                      border: "1px solid " + (isCustom ? "#e2e8f0" : "#f1f5f9"),
+                      cursor: isCustom ? "pointer" : "default", fontFamily: "inherit", whiteSpace: "nowrap",
+                    }}
+                  >Reset</button>
+                </div>
+              );
+            })}
+            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 10 }}>
+              Edits save on tab-out. Road vehicles are entered in L/100km (Australian convention); plant/equipment in L/hr. Changes sync to all devices.
             </div>
           </div>
         );
