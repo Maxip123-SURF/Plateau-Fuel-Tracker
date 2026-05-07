@@ -4143,6 +4143,34 @@ export default function App() {
   // whenever this state changes, so canonicalizeDriverName picks it up.
   const [learnedDriverAliases, setLearnedDriverAliases] = useState({});
   useEffect(() => { setLearnedDriverAliasesDB(learnedDriverAliases); }, [learnedDriverAliases]);
+
+  // ── Driver auto-fill profiles ──────────────────────────────────────────
+  // Admin-curated map of driver name → default rego/division/vehicle/card.
+  // When a driver enters their name on Step 1 and it matches a key here,
+  // the form auto-fills with the saved defaults and the fleet-card photo
+  // step is skipped (the saved card details get attached directly). This
+  // is the "single-vehicle / single-card user" workflow for management
+  // who use the same vehicle and card every time. Cloud-synced via
+  // Supabase setting "driver_profiles" so admin can manage from any
+  // device and changes propagate to all phones in the field. Keyed by
+  // lower-case full name ("first last").
+  const [driverProfiles, setDriverProfiles] = useState({});
+  const driverProfilesRef = useRef(driverProfiles);
+  useEffect(() => { driverProfilesRef.current = driverProfiles; }, [driverProfiles]);
+  // Profile currently applied to the in-progress submission (or null).
+  // When set, the wizard skips the fleet-card photo step and shows the
+  // "Submitting as X" banner on Step 1. Cleared by clicking
+  // "Different vehicle today?" or "Scan card anyway" in the banner.
+  // Ref alongside the state so async scan handlers can read the current
+  // value after their `await`s (state captured at the start of the
+  // handler may be stale by the time the AI scan returns).
+  const [profileApplied, setProfileApplied] = useState(null);
+  const profileAppliedRef = useRef(profileApplied);
+  useEffect(() => { profileAppliedRef.current = profileApplied; }, [profileApplied]);
+  // Settings → Driver profiles form state. Local-only; clears after a
+  // successful add or edit.
+  const [profileEditing, setProfileEditing] = useState(null); // null | { isNew: bool, original?: lowerKey, name, rego, division, vehicleType, cardNumber, cardRego }
+
   const [showKey, setShowKey] = useState(false);
   // Settings → Merge driver names form state. Local-only; clears after a
   // successful merge.
@@ -4454,6 +4482,15 @@ export default function App() {
             }
           }
         } catch (_) {}
+        // Driver auto-fill profiles — local cache reads first, cloud refresh
+        // below overrides if available.
+        try {
+          const dpRes = await window.storage.get("fuel_driver_profiles");
+          if (dpRes?.value) {
+            const loaded = JSON.parse(dpRes.value);
+            if (loaded && typeof loaded === "object") setDriverProfiles(loaded);
+          }
+        } catch (_) {}
         // Admin-curated driver name merges — load local cache first; cloud
         // refresh path syncs from Supabase for cross-device alignment.
         try {
@@ -4542,6 +4579,18 @@ export default function App() {
               if (loaded && typeof loaded === "object") {
                 setEfficiencyThresholds({ ...DEFAULT_EFFICIENCY_RANGES, ...loaded });
                 window.storage.set("fuel_efficiency_thresholds", raw).catch(() => {});
+              }
+            } catch (_) {}
+          }).catch(() => {});
+          // Driver auto-fill profiles from cloud (overrides local) — admin
+          // can manage these from any device, all field phones pick them up.
+          db.loadSetting("driver_profiles").then(raw => {
+            if (!raw) return;
+            try {
+              const loaded = JSON.parse(raw);
+              if (loaded && typeof loaded === "object") {
+                setDriverProfiles(loaded);
+                window.storage.set("fuel_driver_profiles", raw).catch(() => {});
               }
             } catch (_) {}
           }).catch(() => {});
@@ -5525,6 +5574,82 @@ export default function App() {
     persistLearned(newLearned);
   };
 
+  // ── Driver auto-fill profile helpers ──────────────────────────────────
+  // Persist the admin-curated profile map to local + cloud.
+  const persistDriverProfiles = async (next) => {
+    setDriverProfiles(next);
+    const json = JSON.stringify(next);
+    try { await window.storage.set("fuel_driver_profiles", json); } catch (_) {}
+    try { await db.saveSetting("driver_profiles", json); } catch (_) {}
+  };
+
+  // Look up a profile by full name (case-insensitive). Returns the profile
+  // object or null. Reads from the ref so callbacks see the latest map.
+  const findProfileByName = (firstName, lastName) => {
+    const fullName = `${(firstName || "").trim()} ${(lastName || "").trim()}`.trim();
+    if (!fullName) return null;
+    return driverProfilesRef.current[fullName.toLowerCase()] || null;
+  };
+
+  // Apply a profile to the in-progress submission: pre-fill rego/division/
+  // vehicle in the form, populate cardData with the saved card details so
+  // the receipt-photo step doesn't need a card visible, and set the
+  // profileApplied flag (drives the Step 1 banner + suppresses the
+  // missing-card warning on Step 2).
+  const applyDriverProfile = (profile) => {
+    if (!profile) return;
+    setForm(f => ({
+      ...f,
+      registration: profile.rego || f.registration,
+      division: profile.division || f.division,
+      vehicleType: profile.vehicleType || f.vehicleType,
+    }));
+    if (profile.cardNumber || profile.cardRego) {
+      setCardData({
+        cardNumber: profile.cardNumber || null,
+        vehicleOnCard: profile.cardRego || profile.rego || null,
+      });
+    }
+    setProfileApplied(profile);
+  };
+
+  // "Different vehicle today?" — clears the profile from THIS submission
+  // only. The profile remains saved in driverProfiles; next time this
+  // driver opens the app, it'll auto-apply again.
+  const clearProfileForThisEntry = () => {
+    setProfileApplied(null);
+    setForm(f => ({ ...f, registration: "", division: "", vehicleType: "", odometer: "" }));
+    setCardData(null);
+  };
+
+  // "Scan card anyway" — keeps form pre-fill (rego/division/vehicle) but
+  // re-enables the card-photo step for THIS submission. Useful if a
+  // driver swapped cards or wants to verify.
+  const scanCardAnyway = () => {
+    setProfileApplied(null);
+    setCardData(null);
+  };
+
+  // Auto-apply when the driver name on Step 1 matches a saved profile.
+  // Runs whenever the name fields change. Skipped in otherMode (jerry-can
+  // / equipment entries don't fit the single-vehicle pattern).
+  useEffect(() => {
+    if (otherMode) return;
+    if (step !== 1) return;
+    const profile = findProfileByName(form.driverFirstName, form.driverLastName);
+    if (profile) {
+      // Only re-apply if a different (or no) profile is currently active.
+      if (!profileApplied || profileApplied.name?.toLowerCase() !== profile.name?.toLowerCase()) {
+        applyDriverProfile(profile);
+      }
+    } else if (profileApplied) {
+      // Name no longer matches a profile — drop the auto-fill flag but
+      // leave any values the user might have edited intact.
+      setProfileApplied(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.driverFirstName, form.driverLastName, otherMode, step, driverProfiles]);
+
   // ── Form helpers ──────────────────────────────────────────────────────────
   const getLastOdometer = (rego) => {
     if (!rego) return null;
@@ -5579,6 +5704,12 @@ export default function App() {
     setReceiptRotation(0); setReceiptFile(null);
     setCardPreview(null); setCardB64(null); setCardData(null);
     setManualCard(false); setManualCardNum(""); setManualCardRego("");
+    // Clear the per-submission profile flag — the useEffect on the name
+    // fields will re-apply the matching profile (if any) once setForm(base)
+    // re-populates the name from savedDriver. Without this reset, the
+    // useEffect's "same profile already active" guard skips re-applying
+    // and the new submission ends up with name-only auto-fill.
+    setProfileApplied(null);
     setSplitMode(false); setSplits([]);
     setPendingExtraEntries(null);
     setAiScanSnapshot(null);
@@ -5796,7 +5927,11 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     setReceiptPreview(URL.createObjectURL(file));
     setReceiptFile(file);
     setReceiptRotation(0);
-    setReceiptData(null); setCardData(null);
+    setReceiptData(null);
+    // When a profile is active the card details are already on file —
+    // don't blow them away just because the user is taking a new receipt
+    // photo. The post-scan AI extraction is also skipped below.
+    if (!profileApplied) setCardData(null);
     setDateCrossValidation(null);
     setReviewConfirmed(false);
     // Extract photo date from EXIF in background
@@ -5875,12 +6010,18 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
         setDateCrossValidation(cv && cv.issues.length > 0 ? cv : null);
       }
       if (normalized.cardNumber || normalized.vehicleOnCard) {
-        const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
-        setCardData(buildCardDataFromMatch(matched, result));
-        // Known card/rego exception (e.g. Carlos Carillo's WIA53F card for EIA53F vehicle):
-        // auto-fill form registration with the ACTUAL vehicle rego, not the one on the card.
-        if (matched._knownException && matched.actualVehicleRego && !form.registration) {
-          setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
+        // When a driver profile is active, the saved card details are
+        // authoritative \u2014 don't let the AI's read of the receipt photo
+        // overwrite them. The receipt scan is still useful for litres /
+        // price / station data, just not for card details.
+        if (!profileAppliedRef.current) {
+          const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
+          setCardData(buildCardDataFromMatch(matched, result));
+          // Known card/rego exception (e.g. Carlos Carillo's WIA53F card for EIA53F vehicle):
+          // auto-fill form registration with the ACTUAL vehicle rego, not the one on the card.
+          if (matched._knownException && matched.actualVehicleRego && !form.registration) {
+            setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
+          }
         }
       }
     } catch (e) {
@@ -5898,7 +6039,9 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
     // rotation/upload/rescan is abandoned before it can overwrite new state.
     const currentScanId = ++scanIdRef.current;
     setReceiptRotation(newRotation);
-    setReceiptScanning(true); setError(""); setReceiptData(null); setCardData(null); setReviewConfirmed(false);
+    setReceiptScanning(true); setError(""); setReceiptData(null);
+    if (!profileApplied) setCardData(null);
+    setReviewConfirmed(false);
     try {
       const { b64, mime } = await compressImage(receiptFile, newRotation);
       if (scanIdRef.current !== currentScanId) return;
@@ -5918,12 +6061,15 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
         setDateCrossValidation(cv && cv.issues.length > 0 ? cv : null);
       }
       if (normalized.cardNumber || normalized.vehicleOnCard) {
-        const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
-        setCardData(buildCardDataFromMatch(matched, result));
-        // Known card/rego exception (e.g. Carlos Carillo's WIA53F card for EIA53F vehicle):
-        // auto-fill form registration with the ACTUAL vehicle rego, not the one on the card.
-        if (matched._knownException && matched.actualVehicleRego && !form.registration) {
-          setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
+        // Profile-active short-circuit (see handleReceiptFile for rationale).
+        if (!profileAppliedRef.current) {
+          const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
+          setCardData(buildCardDataFromMatch(matched, result));
+          // Known card/rego exception (e.g. Carlos Carillo's WIA53F card for EIA53F vehicle):
+          // auto-fill form registration with the ACTUAL vehicle rego, not the one on the card.
+          if (matched._knownException && matched.actualVehicleRego && !form.registration) {
+            setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
+          }
         }
       }
     } catch (e) {
@@ -5957,12 +6103,15 @@ Return ONLY valid JSON: {"rotation": 0} or {"rotation": 90} or {"rotation": 180}
         setDateCrossValidation(cv && cv.issues.length > 0 ? cv : null);
       }
       if (normalized.cardNumber || normalized.vehicleOnCard) {
-        const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
-        setCardData(buildCardDataFromMatch(matched, result));
-        // Known card/rego exception (e.g. Carlos Carillo's WIA53F card for EIA53F vehicle):
-        // auto-fill form registration with the ACTUAL vehicle rego, not the one on the card.
-        if (matched._knownException && matched.actualVehicleRego && !form.registration) {
-          setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
+        // Profile-active short-circuit (see handleReceiptFile for rationale).
+        if (!profileAppliedRef.current) {
+          const matched = fuzzyMatchFleetCard(normalized.cardNumber, normalized.vehicleOnCard, learnedDBRef.current, learnedCardMappingsRef.current);
+          setCardData(buildCardDataFromMatch(matched, result));
+          // Known card/rego exception (e.g. Carlos Carillo's WIA53F card for EIA53F vehicle):
+          // auto-fill form registration with the ACTUAL vehicle rego, not the one on the card.
+          if (matched._knownException && matched.actualVehicleRego && !form.registration) {
+            setForm(f => ({ ...f, registration: matched.actualVehicleRego }));
+          }
         }
       }
     } catch (e) {
@@ -6879,6 +7028,59 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           }}>{"\u26FD"} Oil & Other</button>
         </div>
 
+        {/* \u2500\u2500 Driver auto-fill profile banner \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+            Visible whenever a profile is matched against the typed name
+            (or pre-filled from savedDriver). Surfaces what's about to be
+            attached to the entry \u2014 vehicle, division, card last-4 \u2014 and
+            offers two override paths:
+              \u00B7 Different vehicle today? \u2014 clear pre-fill for THIS entry only
+              \u00B7 Scan card anyway \u2014 keep vehicle pre-fill, re-enable card photo
+            Profile itself stays saved either way; next submission will
+            auto-apply again. */}
+        {!otherMode && profileApplied && (
+          <div className="fade-in" style={{
+            background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 8,
+            padding: "10px 12px", marginBottom: 14,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 14 }}>{"\u2713"}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#1e40af" }}>
+                  Auto-filled for {profileApplied.name}
+                </div>
+                <div style={{ fontSize: 11, color: "#1e40af", marginTop: 2, opacity: 0.85 }}>
+                  {[
+                    profileApplied.rego,
+                    profileApplied.vehicleType,
+                    profileApplied.cardNumber ? `card \u2026${profileApplied.cardNumber.slice(-4)}` : null,
+                  ].filter(Boolean).join(" \u00B7 ")}
+                </div>
+              </div>
+            </div>
+            <div style={{ fontSize: 11, color: "#1e40af", marginTop: 4, lineHeight: 1.5 }}>
+              The receipt photo is still required, but no fleet-card photo is needed \u2014 your saved card details will be attached to this entry.
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+              <button onClick={clearProfileForThisEntry}
+                title="Clear the auto-filled vehicle and card for this entry only \u2014 your profile stays saved"
+                style={{
+                  padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                  background: "white", color: "#1e40af",
+                  border: "1px solid #93c5fd", cursor: "pointer", fontFamily: "inherit",
+                }}
+              >Different vehicle today?</button>
+              <button onClick={scanCardAnyway}
+                title="Re-enable the fleet-card scan for this entry"
+                style={{
+                  padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                  background: "white", color: "#1e40af",
+                  border: "1px solid #93c5fd", cursor: "pointer", fontFamily: "inherit",
+                }}
+              >Scan card anyway</button>
+            </div>
+          </div>
+        )}
+
         <div style={{ display: "flex", gap: 8 }}>
           <div style={{ flex: 1 }}>
             <FieldInput label="First Name" value={form.driverFirstName} onChange={v => {
@@ -7657,16 +7859,24 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
     return (
     <div className="fade-in">
       <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Photo</div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>
+          {profileApplied ? "Receipt photo" : "Photo"}
+        </div>
         <div style={{ fontSize: 13, color: "#64748b", marginTop: 3 }}>
-          Take a clear photo including both the receipt and fleet card in the same photo. Make sure the entire receipt is visible and the fleet card number is shown clearly.
+          {profileApplied
+            ? <>Take a clear photo of the receipt only. Your fleet card details are already saved on file \u2014 no need to capture the card.</>
+            : <>Take a clear photo including both the receipt and fleet card in the same photo. Make sure the entire receipt is visible and the fleet card number is shown clearly.</>
+          }
           {splitMode && <><br /><span style={{ color: "#1e40af", fontWeight: 500 }}>Split receipt: litres will be allocated per vehicle from Step 1</span></>}
         </div>
         <div style={{
           marginTop: 8, padding: "8px 12px", background: "#eff6ff", border: "1px solid #93c5fd",
           borderRadius: 8, fontSize: 11, color: "#1e40af",
         }}>
-          <strong>Tips for a good scan:</strong> Lay the receipt flat {"\u00B7"} Place the fleet card next to it showing the full 16-digit number {"\u00B7"} Make sure all text is in focus and nothing is cut off
+          {profileApplied
+            ? <><strong>Tips for a good scan:</strong> Lay the receipt flat {"\u00B7"} Make sure all text is in focus and the receipt total is visible {"\u00B7"} Nothing is cut off at the edges</>
+            : <><strong>Tips for a good scan:</strong> Lay the receipt flat {"\u00B7"} Place the fleet card next to it showing the full 16-digit number {"\u00B7"} Make sure all text is in focus and nothing is cut off</>
+          }
         </div>
       </div>
       {!apiKey && (
@@ -7675,7 +7885,9 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
         </div>
       )}
       <PhotoUpload preview={receiptPreview} scanning={receiptScanning} onFile={handleReceiptFile}
-        inputRef={receiptRef} label="Receipt & fleet card photo" caption="Both receipt and fleet card in one clear photo" />
+        inputRef={receiptRef}
+        label={profileApplied ? "Receipt photo" : "Receipt & fleet card photo"}
+        caption={profileApplied ? "Just the receipt \u2014 card is on file" : "Both receipt and fleet card in one clear photo"} />
 
       {/* Rotation controls */}
       {receiptPreview && !receiptScanning && (
@@ -14653,6 +14865,163 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 10 }}>
               Edits save on tab-out. Road vehicles are entered in L/100km (Australian convention); plant/equipment in L/hr. Changes sync to all devices.
             </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Driver auto-fill profiles ───────────────────────────────────
+          For management / single-vehicle drivers who always use the same
+          rego + fleet card. Admin creates a profile here keyed by the
+          driver's name; once that driver enters their name on Step 1 of
+          a submission (on any device), the form auto-fills and the
+          fleet-card photo step is skipped. Profiles sync via Supabase so
+          admin can manage from anywhere — no need to walk up to each
+          phone. */}
+      {(() => {
+        // Save / overwrite a profile keyed by lowercase name.
+        const saveProfile = async (data) => {
+          const fullName = (data.name || "").trim();
+          if (!fullName) { showToast("Driver name required"); return false; }
+          const key = fullName.toLowerCase();
+          const next = { ...driverProfiles };
+          // If admin renamed an existing profile, drop the old key first.
+          if (data.original && data.original !== key) delete next[data.original];
+          next[key] = {
+            name: fullName,
+            rego: (data.rego || "").trim().toUpperCase(),
+            division: data.division || "",
+            vehicleType: data.vehicleType || "",
+            cardNumber: (data.cardNumber || "").replace(/\s/g, ""),
+            cardRego: (data.cardRego || "").trim().toUpperCase(),
+          };
+          await persistDriverProfiles(next);
+          showToast(`Profile saved for ${fullName}`);
+          return true;
+        };
+        const removeProfile = (key) => {
+          const profile = driverProfiles[key];
+          if (!profile) return;
+          setConfirmAction({
+            message: `Remove auto-fill profile for "${profile.name}"?\n\nTheir entries stay untouched — only the saved defaults are deleted. They'll go back to manually entering vehicle and card details on each submission.`,
+            onConfirm: async () => {
+              const next = { ...driverProfiles };
+              delete next[key];
+              await persistDriverProfiles(next);
+              setConfirmAction(null);
+              showToast(`Profile removed for ${profile.name}`);
+            },
+          });
+        };
+        const profileEntries = Object.entries(driverProfiles).sort((a, b) => a[1].name.localeCompare(b[1].name));
+        const allDivisions = Object.keys(DIVISIONS);
+        const editing = profileEditing;
+        const editTypes = editing?.division ? (DIVISIONS[editing.division]?.types || []) : ALL_VEHICLE_TYPES;
+        return (
+          <div style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", letterSpacing: "0.04em", textTransform: "uppercase" }}>Driver auto-fill profiles</div>
+              {!editing && (
+                <button
+                  onClick={() => setProfileEditing({ isNew: true, name: "", rego: "", division: "", vehicleType: "", cardNumber: "", cardRego: "" })}
+                  title="Create a new auto-fill profile for a single-vehicle driver"
+                  style={{ padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: "#16a34a", color: "white", border: "none", cursor: "pointer", fontFamily: "inherit" }}
+                >+ Add profile</button>
+              )}
+            </div>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
+              Saved drivers (e.g. management who always use one ute + one card) skip the fleet-card photo step on submission. The receipt photo is still required. Profiles sync to all devices via the cloud.
+            </div>
+
+            {/* Add / edit form */}
+            {editing && (
+              <div className="fade-in" style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 10 }}>
+                  {editing.isNew ? "New profile" : `Editing "${editing.name}"`}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div>
+                    <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Driver name (full)</label>
+                    <input value={editing.name} onChange={e => setProfileEditing({ ...editing, name: e.target.value })}
+                      placeholder="e.g. Bob Smith"
+                      style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }} />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Default rego</label>
+                    <input value={editing.rego} onChange={e => setProfileEditing({ ...editing, rego: e.target.value.toUpperCase() })}
+                      placeholder="e.g. CD36PH"
+                      style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }} />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Division</label>
+                    <select value={editing.division} onChange={e => setProfileEditing({ ...editing, division: e.target.value, vehicleType: "" })}
+                      style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}>
+                      <option value="">— select —</option>
+                      {allDivisions.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Vehicle type</label>
+                    <select value={editing.vehicleType} onChange={e => setProfileEditing({ ...editing, vehicleType: e.target.value })}
+                      style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a", background: "white" }}>
+                      <option value="">— select —</option>
+                      {editTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Fleet card number</label>
+                    <input value={formatCardNumber(editing.cardNumber)} onChange={e => setProfileEditing({ ...editing, cardNumber: e.target.value.replace(/\s/g, "") })}
+                      placeholder="7034 3051 …"
+                      style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }} />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>Card rego (usually same as vehicle)</label>
+                    <input value={editing.cardRego} onChange={e => setProfileEditing({ ...editing, cardRego: e.target.value.toUpperCase() })}
+                      placeholder="e.g. CD36PH"
+                      style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #e2e8f0", fontSize: 12, outline: "none", fontFamily: "inherit", color: "#0f172a" }} />
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                  <button onClick={async () => { const ok = await saveProfile(editing); if (ok) setProfileEditing(null); }}
+                    style={{ padding: "7px 14px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "#16a34a", color: "white", border: "none", cursor: "pointer", fontFamily: "inherit" }}>Save profile</button>
+                  <button onClick={() => setProfileEditing(null)}
+                    style={{ padding: "7px 14px", borderRadius: 6, fontSize: 12, fontWeight: 500, background: "white", color: "#64748b", border: "1px solid #e2e8f0", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+                </div>
+              </div>
+            )}
+
+            {/* List */}
+            {profileEntries.length === 0 && !editing && (
+              <div style={{ fontSize: 12, color: "#94a3b8", padding: "8px 0", fontStyle: "italic" }}>
+                No profiles yet — click "+ Add profile" to set one up.
+              </div>
+            )}
+            {profileEntries.map(([key, p]) => (
+              <div key={key} style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                padding: "8px 10px", marginBottom: 6, background: "#f8fafc",
+                borderRadius: 8, border: "1px solid #e2e8f0",
+              }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>{p.name}</div>
+                  <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>
+                    {[
+                      p.rego && `${p.rego}`,
+                      p.vehicleType && `${p.vehicleType}`,
+                      p.division && `${p.division}`,
+                      p.cardNumber && `card …${p.cardNumber.slice(-4)}`,
+                    ].filter(Boolean).join("  ·  ") || "(no defaults set)"}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button onClick={() => setProfileEditing({ isNew: false, original: key, ...p })}
+                    title="Edit this profile"
+                    style={{ padding: "4px 8px", borderRadius: 6, fontSize: 11, fontWeight: 500, background: "white", color: "#2563eb", border: "1px solid #bfdbfe", cursor: "pointer", fontFamily: "inherit" }}>Edit</button>
+                  <button onClick={() => removeProfile(key)}
+                    title="Delete this profile (entries stay untouched)"
+                    style={{ padding: "4px 8px", borderRadius: 6, fontSize: 11, fontWeight: 500, background: "white", color: "#dc2626", border: "1px solid #fecaca", cursor: "pointer", fontFamily: "inherit" }}>Remove</button>
+                </div>
+              </div>
+            ))}
           </div>
         );
       })()}
