@@ -7028,59 +7028,6 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           }}>{"\u26FD"} Oil & Other</button>
         </div>
 
-        {/* \u2500\u2500 Driver auto-fill profile banner \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-            Visible whenever a profile is matched against the typed name
-            (or pre-filled from savedDriver). Surfaces what's about to be
-            attached to the entry \u2014 vehicle, division, card last-4 \u2014 and
-            offers two override paths:
-              \u00B7 Different vehicle today? \u2014 clear pre-fill for THIS entry only
-              \u00B7 Scan card anyway \u2014 keep vehicle pre-fill, re-enable card photo
-            Profile itself stays saved either way; next submission will
-            auto-apply again. */}
-        {!otherMode && profileApplied && (
-          <div className="fade-in" style={{
-            background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 8,
-            padding: "10px 12px", marginBottom: 14,
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-              <span style={{ fontSize: 14 }}>{"\u2713"}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: "#1e40af" }}>
-                  Auto-filled for {profileApplied.name}
-                </div>
-                <div style={{ fontSize: 11, color: "#1e40af", marginTop: 2, opacity: 0.85 }}>
-                  {[
-                    profileApplied.rego,
-                    profileApplied.vehicleType,
-                    profileApplied.cardNumber ? `card \u2026${profileApplied.cardNumber.slice(-4)}` : null,
-                  ].filter(Boolean).join(" \u00B7 ")}
-                </div>
-              </div>
-            </div>
-            <div style={{ fontSize: 11, color: "#1e40af", marginTop: 4, lineHeight: 1.5 }}>
-              The receipt photo is still required, but no fleet-card photo is needed \u2014 your saved card details will be attached to this entry.
-            </div>
-            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-              <button onClick={clearProfileForThisEntry}
-                title="Clear the auto-filled vehicle and card for this entry only \u2014 your profile stays saved"
-                style={{
-                  padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
-                  background: "white", color: "#1e40af",
-                  border: "1px solid #93c5fd", cursor: "pointer", fontFamily: "inherit",
-                }}
-              >Different vehicle today?</button>
-              <button onClick={scanCardAnyway}
-                title="Re-enable the fleet-card scan for this entry"
-                style={{
-                  padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
-                  background: "white", color: "#1e40af",
-                  border: "1px solid #93c5fd", cursor: "pointer", fontFamily: "inherit",
-                }}
-              >Scan card anyway</button>
-            </div>
-          </div>
-        )}
-
         <div style={{ display: "flex", gap: 8 }}>
           <div style={{ flex: 1 }}>
             <FieldInput label="First Name" value={form.driverFirstName} onChange={v => {
@@ -7490,6 +7437,22 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
           }}
           placeholder="e.g. AB12CD" hint="6 characters — letters and numbers only" />
 
+        {/* Auto-fill override link — small text-link sitting directly
+            under the rego field. Only the override is shown here; the
+            "Scan card anyway" option lives on Step 2 (the receipt
+            photo page) so it's not in the way of the entry form. */}
+        {!otherMode && profileApplied && (
+          <button onClick={clearProfileForThisEntry}
+            title={`Clear the auto-filled vehicle for this entry only — your profile (${profileApplied.name}) stays saved and will reapply next submission`}
+            style={{
+              background: "none", border: "none", color: "#64748b",
+              fontSize: 11, padding: "0", margin: "-8px 0 12px 0",
+              cursor: "pointer", fontFamily: "inherit", textDecoration: "underline",
+              alignSelf: "flex-start",
+            }}
+          >Different vehicle today?</button>
+        )}
+
         {/* Rego match card */}
         {form._regoMatch && (
           <div className="fade-in" style={{
@@ -7878,6 +7841,20 @@ const FUEL_EQUIPMENT_RE = /jerry|2.?stroke.?fuel|stump|leaf.?blow|chainsaw|fuel.
             : <><strong>Tips for a good scan:</strong> Lay the receipt flat {"\u00B7"} Place the fleet card next to it showing the full 16-digit number {"\u00B7"} Make sure all text is in focus and nothing is cut off</>
           }
         </div>
+        {/* Scan-card escape hatch \u2014 only on Step 2, only when a profile
+            is active. Sits below the tips so it's discoverable but
+            doesn't compete with the main "take a photo" instruction. */}
+        {profileApplied && (
+          <button onClick={scanCardAnyway}
+            title={`Re-enable the fleet-card scan for this entry \u2014 useful if ${profileApplied.name} has swapped cards or is using a different one today`}
+            style={{
+              background: "none", border: "none", color: "#1e40af",
+              fontSize: 11, padding: "6px 0 0 0", marginTop: 4,
+              cursor: "pointer", fontFamily: "inherit", textDecoration: "underline",
+              display: "block",
+            }}
+          >Scan fleet card anyway?</button>
+        )}
       </div>
       {!apiKey && (
         <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: 10, marginBottom: 14, fontSize: 13, color: "#b45309" }}>
